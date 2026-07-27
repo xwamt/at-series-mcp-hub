@@ -1,0 +1,70 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
+import { AT_SERIES_HOST_APP_ENV, MCP_SERVER_DISPLAY_NAME } from '../protocol/index';
+import { createHubRuntime } from './server';
+
+declare const __HUB_VERSION__: string;
+
+async function main(): Promise<void> {
+  const hostApp = process.env[AT_SERIES_HOST_APP_ENV] ?? 'unknown';
+  const hubVersion =
+    typeof __HUB_VERSION__ === 'string' && __HUB_VERSION__.length > 0
+      ? __HUB_VERSION__
+      : '0.0.0-dev';
+
+  const runtime = await createHubRuntime({ hostApp, hubVersion });
+
+  const mcpServer = new McpServer({
+    name: MCP_SERVER_DISPLAY_NAME,
+    version: hubVersion
+  });
+
+  mcpServer.server.registerCapabilities({
+    tools: {}
+  });
+
+  mcpServer.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const tools = await runtime.listToolsForMcp();
+    return {
+      tools: tools.map((tool) => ({
+        name: tool.name,
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema
+      }))
+    };
+  });
+
+  mcpServer.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const name = request.params.name;
+    const args =
+      request.params.arguments && typeof request.params.arguments === 'object'
+        ? (request.params.arguments as Record<string, unknown>)
+        : {};
+    return runtime.callTool(name, args);
+  });
+
+  const transport = new StdioServerTransport();
+  await mcpServer.connect(transport);
+
+  const shutdown = async (): Promise<void> => {
+    await runtime.close();
+    await mcpServer.close();
+  };
+
+  process.on('SIGINT', () => {
+    void shutdown().finally(() => process.exit(0));
+  });
+  process.on('SIGTERM', () => {
+    void shutdown().finally(() => process.exit(0));
+  });
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

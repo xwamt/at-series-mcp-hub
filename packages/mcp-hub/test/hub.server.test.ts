@@ -1,0 +1,189 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { FsBridgePublisher } from '../src/publisher/BridgePublisher';
+import { createHubRuntime } from '../src/hub/server';
+import type { BridgeRegistryRecord, ToolCatalogEntry } from '../src/protocol/index';
+import { startFakeBridge } from './fixtures/fakeBridge';
+
+function tool(name: string): ToolCatalogEntry {
+  return {
+    name,
+    title: name,
+    description: `${name} desc`,
+    risk: 'read',
+    inputSchema: { type: 'object', properties: {} }
+  };
+}
+
+function baseRecord(
+  overrides: Partial<BridgeRegistryRecord> & {
+    bridgeId: string;
+    port: number;
+    token: string;
+  }
+): BridgeRegistryRecord {
+  return {
+    protocolVersion: 1,
+    pluginId: 'at.terminal',
+    pluginDisplayName: 'AT Terminal',
+    pluginVersion: '0.2.17',
+    hostApp: 'cursor',
+    pid: process.pid,
+    updatedAt: Date.now(),
+    tools: [],
+    ...overrides
+  };
+}
+
+describe('createHubRuntime', () => {
+  let home: string;
+  const hostApp = 'cursor';
+  const hubVersion = '0.1.0';
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'at-series-hub-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  it('aggregates disjoint tools from two plugins plus at_list_providers', async () => {
+    const terminal = await startFakeBridge({
+      bridgeId: 'term-bridge',
+      pluginId: 'at.terminal',
+      tools: [tool('list_ssh_servers')]
+    });
+    const jumpserver = await startFakeBridge({
+      bridgeId: 'js-bridge',
+      pluginId: 'at.jumpserver',
+      pluginDisplayName: 'AT JumpServer Terminal',
+      tools: [tool('jumpserver_list_assets')]
+    });
+
+    try {
+      const termPub = new FsBridgePublisher({
+        home,
+        bridgeId: 'term-bridge',
+        hostApp
+      });
+      await termPub.publish(
+        baseRecord({
+          bridgeId: 'term-bridge',
+          pluginId: 'at.terminal',
+          port: terminal.port,
+          token: terminal.token,
+          tools: [tool('list_ssh_servers')]
+        })
+      );
+
+      const jsPub = new FsBridgePublisher({
+        home,
+        bridgeId: 'js-bridge',
+        hostApp
+      });
+      await jsPub.publish(
+        baseRecord({
+          bridgeId: 'js-bridge',
+          pluginId: 'at.jumpserver',
+          pluginDisplayName: 'AT JumpServer Terminal',
+          port: jumpserver.port,
+          token: jumpserver.token,
+          tools: [tool('jumpserver_list_assets')]
+        })
+      );
+
+      const runtime = await createHubRuntime({ home, hostApp, hubVersion });
+      const tools = await runtime.listToolsForMcp();
+      const names = tools.map((t) => t.name).sort();
+
+      expect(names).toEqual([
+        'at_list_providers',
+        'jumpserver_list_assets',
+        'list_ssh_servers'
+      ]);
+      await runtime.close();
+    } finally {
+      await terminal.close();
+      await jumpserver.close();
+    }
+  });
+
+  it('callTool invokes bridge and returns result JSON', async () => {
+    const bridge = await startFakeBridge({
+      bridgeId: 'term-bridge',
+      pluginId: 'at.terminal',
+      tools: [tool('list_ssh_servers')],
+      onInvoke: (req) => ({
+        ok: true,
+        name: req.name,
+        result: { servers: [{ name: 'prod' }] }
+      })
+    });
+
+    try {
+      const publisher = new FsBridgePublisher({
+        home,
+        bridgeId: 'term-bridge',
+        hostApp
+      });
+      await publisher.publish(
+        baseRecord({
+          bridgeId: 'term-bridge',
+          port: bridge.port,
+          token: bridge.token,
+          tools: [tool('list_ssh_servers')]
+        })
+      );
+
+      const runtime = await createHubRuntime({ home, hostApp, hubVersion });
+      const response = await runtime.callTool('list_ssh_servers', {});
+
+      expect(response.isError).toBeUndefined();
+      expect(response.content).toHaveLength(1);
+      expect(response.content[0]?.type).toBe('text');
+      expect(JSON.parse(response.content[0]!.text)).toEqual({
+        servers: [{ name: 'prod' }]
+      });
+      await runtime.close();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('ignores bridges registered for a different hostApp', async () => {
+    const bridge = await startFakeBridge({
+      bridgeId: 'kiro-bridge',
+      hostApp: 'kiro',
+      tools: [tool('list_ssh_servers')]
+    });
+
+    try {
+      const publisher = new FsBridgePublisher({
+        home,
+        bridgeId: 'kiro-bridge',
+        hostApp: 'kiro'
+      });
+      await publisher.publish(
+        baseRecord({
+          bridgeId: 'kiro-bridge',
+          hostApp: 'kiro',
+          port: bridge.port,
+          token: bridge.token,
+          tools: [tool('list_ssh_servers')]
+        })
+      );
+
+      const runtime = await createHubRuntime({ home, hostApp, hubVersion });
+      const tools = await runtime.listToolsForMcp();
+      const names = tools.map((t) => t.name);
+
+      expect(names).toEqual(['at_list_providers']);
+      await runtime.close();
+    } finally {
+      await bridge.close();
+    }
+  });
+});
