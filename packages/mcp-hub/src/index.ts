@@ -32,3 +32,4 @@ export {
   type UnhealthyBridgeInput
 } from './hub/listProviders';
 export { createHubRuntime, type HubRuntime } from './hub/server';
+export { defaultAutoApproveToolNames } from './installer/autoApprove';
