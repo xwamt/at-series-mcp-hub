@@ -7,3 +7,10 @@ export {
 } from './registry/read';
 export { FsBridgePublisher } from './publisher/BridgePublisher';
 export { syncHubBundle } from './publisher/HubBundleSync';
+export {
+  BridgeHttpError,
+  bridgeGetHealth,
+  bridgeGetTools,
+  bridgeInvoke,
+  type BridgeClientRecord
+} from './bridgeClient/http';

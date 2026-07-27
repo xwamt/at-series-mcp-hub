@@ -1,0 +1,97 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+  bridgeGetHealth,
+  bridgeGetTools,
+  bridgeInvoke,
+  BridgeHttpError
+} from '../src/bridgeClient/http';
+import { startFakeBridge, type FakeBridgeHandle } from './fixtures/fakeBridge';
+
+describe('bridgeClient HTTP', () => {
+  let bridge: FakeBridgeHandle;
+
+  beforeEach(async () => {
+    bridge = await startFakeBridge();
+  });
+
+  afterEach(async () => {
+    await bridge.close();
+  });
+
+  function record(overrides: { token?: string } = {}) {
+    return {
+      port: bridge.port,
+      token: overrides.token ?? bridge.token,
+      endpoints: undefined as undefined
+    };
+  }
+
+  it('GET /health success', async () => {
+    const health = await bridgeGetHealth(record());
+    expect(health.ok).toBe(true);
+    expect(health.protocolVersion).toBe(1);
+    expect(health.bridgeId).toBe('fake-bridge-1');
+    expect(health.pluginId).toBe('at.terminal');
+    expect(health.hostApp).toBe('cursor');
+    expect(typeof health.pid).toBe('number');
+    expect(typeof health.updatedAt).toBe('number');
+  });
+
+  it('GET /tools success', async () => {
+    const tools = await bridgeGetTools(record());
+    expect(tools.protocolVersion).toBe(1);
+    expect(tools.tools).toHaveLength(1);
+    expect(tools.tools[0].name).toBe('list_ssh_servers');
+    expect(tools.tools[0].risk).toBe('read');
+  });
+
+  it('POST /invoke success', async () => {
+    const result = await bridgeInvoke(record(), {
+      name: 'list_ssh_servers',
+      arguments: {}
+    });
+    expect(result).toEqual({
+      ok: true,
+      name: 'list_ssh_servers',
+      result: { echoed: {} }
+    });
+  });
+
+  it('throws UNAUTHORIZED on bad token for health', async () => {
+    await expect(bridgeGetHealth(record({ token: 'wrong-token' }))).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof BridgeHttpError &&
+        err.code === 'UNAUTHORIZED' &&
+        err.status === 401
+    );
+  });
+
+  it('invoke returns VALIDATION_ERROR structured body without throwing', async () => {
+    await bridge.close();
+    bridge = await startFakeBridge({
+      onInvoke: () => ({
+        status: 422,
+        body: {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid arguments',
+            details: { field: 'serverId' }
+          }
+        }
+      })
+    });
+
+    const result = await bridgeInvoke(record(), {
+      name: 'list_ssh_servers',
+      arguments: { serverId: 1 }
+    });
+
+    expect(result).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid arguments',
+        details: { field: 'serverId' }
+      }
+    });
+  });
+});
