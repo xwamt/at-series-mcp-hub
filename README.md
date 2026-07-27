@@ -6,12 +6,12 @@ This repository is the **single source of truth** for:
 
 - Bridge registration protocol
 - Hub runtime contract
-- TypeScript package `@at-series/mcp-hub` (protocol types live under `packages/mcp-hub/src/protocol`)
-- Series-level MCP skill (planned)
+- TypeScript package `@at-series/mcp-hub` (`packages/mcp-hub`)
+- Series-level MCP skill (planned, P1)
 
 ## Status
 
-Design / contract phase. Implementation follows `docs/protocol/v1.md`.
+**P0a** — protocol, registry, publisher, hub runtime, and installer helpers are implemented under `packages/mcp-hub`. Plugin migrations (P0b/P0c) consume this package.
 
 ## Docs
 
@@ -32,11 +32,106 @@ Design / contract phase. Implementation follows `docs/protocol/v1.md`.
 - Hub aggregates tools dynamically and routes `tools/call` via `POST /invoke`
 - Credentials, confirmations, and domain logic stay inside plugins
 
-## Quick links for plugin authors
+## Quick start (plugin authors)
 
-1. Read **Protocol v1** end-to-end
-2. Follow **Plugin integration guide**
-3. Implement Bridge HTTP: `GET /health`, `GET /tools`, `POST /invoke`
-4. Publish registry record with `protocolVersion: 1` and tool `risk` levels
-5. Do **not** ship a separate per-plugin MCP stdio server entry
+### 1. Depend on the package
 
+```json
+{
+  "dependencies": {
+    "@at-series/mcp-hub": "^0.1.0"
+  }
+}
+```
+
+During local development you may use a workspace/`file:` dependency until the package is published.
+
+### 2. Sync Hub bundle on activate
+
+Ship the packaged hub (`dist/hub.js` from this package) inside your VSIX, then elect it into the stable path:
+
+```ts
+import { syncHubBundle, hubJsPath } from '@at-series/mcp-hub';
+
+// Prefer the dedicated package export (CJS):
+const bundledHub = require.resolve('@at-series/mcp-hub/hub');
+// equivalent: .../node_modules/@at-series/mcp-hub/dist/hub.js
+
+await syncHubBundle({
+  version: '0.1.0', // hub package semver you ship
+  bundlePath: bundledHub,
+  pluginId: 'at.example',
+  pluginVersion: '1.2.3'
+});
+
+const hubPath = hubJsPath(); // ~/.at-series/mcp/hub.js
+```
+
+Election rules: higher semver wins; same semver with different `bundleSha256` overwrites (hotfix); lower semver never downgrades.
+
+### 3. Publish Bridge lifecycle
+
+Implement Bridge HTTP yourself (`GET /health`, `GET /tools`, `POST /invoke`). Use the publisher only for registry files:
+
+```ts
+import {
+  FsBridgePublisher,
+  AT_SERIES_PROTOCOL_VERSION,
+  type BridgeRegistryRecord
+} from '@at-series/mcp-hub';
+
+const publisher = new FsBridgePublisher({
+  bridgeId: 'window-1',
+  hostApp: 'cursor'
+});
+
+const record: BridgeRegistryRecord = {
+  protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+  bridgeId: 'window-1',
+  pluginId: 'at.example',
+  pluginDisplayName: 'AT Example',
+  pluginVersion: '1.2.3',
+  hostApp: 'cursor',
+  port: 43123,
+  token: '...', // never log in plaintext
+  pid: process.pid,
+  updatedAt: Date.now(),
+  tools: [/* ToolCatalogEntry[] with risk */]
+};
+
+await publisher.publish(record);
+// every <= 30s:
+await publisher.heartbeat();
+// on deactivate:
+await publisher.unpublish(); // deletes only your registry file
+```
+
+### 4. Ensure IDE MCP config
+
+Write/repair the single **`AT Series`** entry (migrates legacy AT Terminal / JumpServer names; does not delete third-party servers):
+
+```ts
+import {
+  ensureAtSeriesMcpConfig,
+  defaultAutoApproveToolNames,
+  hubJsPath
+} from '@at-series/mcp-hub';
+
+await ensureAtSeriesMcpConfig({
+  target: 'cursor', // or 'kiro' | 'continue'
+  hostApp: 'cursor',
+  hubJsAbsolutePath: hubJsPath(),
+  registryTools: myTools // used to compute read-only autoApprove
+});
+
+// autoApprove = risk=read tools + at_list_providers
+const autoApprove = defaultAutoApproveToolNames(myTools);
+```
+
+### 5. Read the contracts
+
+1. [docs/protocol/v1.md](docs/protocol/v1.md) — normative fields and behavior
+2. [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) — checklist
+3. [AGENTS.md](AGENTS.md) — migration rules and anti-patterns
+
+Do **not** ship a separate per-plugin MCP stdio server or `languageModelTools` for the same tools.

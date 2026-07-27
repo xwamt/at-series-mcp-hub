@@ -1,5 +1,16 @@
+/**
+ * Public API for `@at-series/mcp-hub`.
+ *
+ * Plugin authors typically need: protocol types, FsBridgePublisher, syncHubBundle,
+ * ensureAtSeriesMcpConfig, and defaultAutoApproveToolNames.
+ * Normative contract: docs/protocol/v1.md
+ */
+
+// --- protocol (types, constants, path helpers) ---
 export * from './protocol/index';
 export * from './protocol/paths';
+
+// --- registry ---
 export {
   listBridgeRecords,
   parseBridgeRegistryRecord,
@@ -10,8 +21,12 @@ export {
   type WatchBridgeRegistryHandle,
   type WatchBridgeRegistryOptions
 } from './registry/watch';
+
+// --- publisher / hub bundle election ---
 export { FsBridgePublisher } from './publisher/BridgePublisher';
 export { syncHubBundle } from './publisher/HubBundleSync';
+
+// --- bridge HTTP client (Hub -> Bridge) ---
 export {
   BridgeHttpError,
   bridgeGetHealth,
@@ -19,6 +34,8 @@ export {
   bridgeInvoke,
   type BridgeClientRecord
 } from './bridgeClient/http';
+
+// --- hub runtime / aggregation ---
 export {
   aggregateTools,
   orderBridgesForTool,
@@ -32,6 +49,8 @@ export {
   type UnhealthyBridgeInput
 } from './hub/listProviders';
 export { createHubRuntime, type HubRuntime } from './hub/server';
+
+// --- MCP config installer ---
 export {
   defaultAutoApproveToolNames,
   ensureAtSeriesMcpConfig,

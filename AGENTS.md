@@ -91,9 +91,9 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 
 ---
 
-## 4. 建议仓库布局（目标态）
+## 4. 仓库布局
 
-单一包布局（边界不能破）：
+单一包布局（`packages/mcp-hub` = `@at-series/mcp-hub`；边界不能破）：
 
 ```text
 at-series-mcp-hub/

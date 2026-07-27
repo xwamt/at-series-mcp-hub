@@ -22,6 +22,33 @@ Your extension host
   鈹斺攢 (MCP build) sync ~/.at-series/mcp/hub.js
 ```
 
+## Depend on the shared package
+
+```bash
+npm install @at-series/mcp-hub
+```
+
+```ts
+import {
+  FsBridgePublisher,
+  syncHubBundle,
+  ensureAtSeriesMcpConfig,
+  defaultAutoApproveToolNames,
+  hubJsPath,
+  AT_SERIES_PROTOCOL_VERSION,
+  type BridgeRegistryRecord,
+  type ToolCatalogEntry
+} from '@at-series/mcp-hub';
+```
+
+Hub bundle path for packaging / sync:
+
+```ts
+const bundledHub = require.resolve('@at-series/mcp-hub/hub'); // dist/hub.js
+```
+
+You still **implement your own** Bridge HTTP server. This package does not ship a Bridge framework.
+
 ## Step-by-step
 
 ### 1. Choose stable identities
@@ -104,24 +131,59 @@ Path:
 
 Minimum fields: see protocol section 5.
 
+Use `FsBridgePublisher` from `@at-series/mcp-hub`:
+
+```ts
+const publisher = new FsBridgePublisher({
+  bridgeId: 'window-1',
+  hostApp: 'cursor'
+});
+
+await publisher.publish(record); // BridgeRegistryRecord
+await publisher.updateTools(tools);
+await publisher.heartbeat();
+await publisher.unpublish(); // deactivate: delete file only
+```
+
 Lifecycle:
 
 - activate/start Bridge -> `publish`
 - tools change -> `updateTools`
 - every <= 30s -> `heartbeat` (`updatedAt`)
-- deactivate -> `unpublish` (delete file only)
+- deactivate -> `unpublish` (delete file only; never delete hub.js)
 
 ### 5. Sync Hub bundle (MCP-capable builds)
 
 On activate:
 
-1. Locate packaged `hub.js` inside your VSIX
-2. Call hub election sync (higher semver wins; no downgrade)
-3. Do not point IDE config at your extension version path
+```ts
+await syncHubBundle({
+  version: '0.1.0',
+  bundlePath: require.resolve('@at-series/mcp-hub/hub'),
+  pluginId: 'at.example',
+  pluginVersion: '1.2.3'
+});
+```
+
+Rules: higher semver wins; same semver + different hash overwrites (hotfix); lower semver never downgrades. Do not point IDE config at your extension version path — always `~/.at-series/mcp/hub.js`.
 
 ### 6. Install MCP config once
 
-Write/repair a single server:
+Prefer the helper (migrates legacy AT entries; does not delete third-party servers):
+
+```ts
+await ensureAtSeriesMcpConfig({
+  target: 'cursor', // 'kiro' | 'continue'
+  hostApp: 'cursor',
+  hubJsAbsolutePath: hubJsPath(),
+  registryTools: tools as ToolCatalogEntry[]
+});
+
+const autoApprove = defaultAutoApproveToolNames(tools);
+// -> risk=read names + at_list_providers
+```
+
+Resulting Cursor/Kiro shape:
 
 ```json
 {
@@ -137,8 +199,6 @@ Write/repair a single server:
   }
 }
 ```
-
-`autoApprove` should include only `risk=read` tools (+ built-in `at_list_providers`).
 
 Migrate away:
 

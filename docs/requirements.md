@@ -279,8 +279,11 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | **本文件 `requirements.md`** | 需求真源：已拍板决策、范围、验收 |
 | `../AGENTS.md` | Agent 实现指导（本仓 + 插件迁移清单） |
 | `protocol/v1.md` | 接口/字段/行为规范（实现契约） |
-| `guides/plugin-integration.md` | 新插件怎么接入 |
+| `guides/plugin-integration.md` | 新插件怎么接入（imports 以 `@at-series/mcp-hub` 为准） |
 | `decisions/ADR-001-*.md` | 为什么选这套架构 |
+| `../README.md` | 仓级概述 + 插件作者 quick start |
+| `packages/mcp-hub/README.md` | npm 包公开面摘要 |
+| `packages/mcp-hub/src/index.ts` | 包公开 API 入口 |
 | `packages/mcp-hub/src/protocol/index.ts` | 类型化契约（由 `@at-series/mcp-hub` 导出） |
 
 修订规则：
