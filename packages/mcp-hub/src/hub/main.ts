@@ -16,15 +16,31 @@ async function main(): Promise<void> {
       ? __HUB_VERSION__
       : '0.0.0-dev';
 
-  const runtime = await createHubRuntime({ hostApp, hubVersion });
+  let mcpServer: McpServer | undefined;
 
-  const mcpServer = new McpServer({
+  const runtime = await createHubRuntime({
+    hostApp,
+    hubVersion,
+    onToolsListChanged: () => {
+      if (!mcpServer) {
+        return;
+      }
+      try {
+        // SDK McpServer.sendToolListChanged → notifications/tools/list_changed
+        mcpServer.sendToolListChanged();
+      } catch {
+        // Client may not be connected yet; ignore.
+      }
+    }
+  });
+
+  mcpServer = new McpServer({
     name: MCP_SERVER_DISPLAY_NAME,
     version: hubVersion
   });
 
   mcpServer.server.registerCapabilities({
-    tools: {}
+    tools: { listChanged: true }
   });
 
   mcpServer.server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -53,7 +69,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     await runtime.close();
-    await mcpServer.close();
+    await mcpServer?.close();
   };
 
   process.on('SIGINT', () => {

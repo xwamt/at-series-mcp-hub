@@ -5,6 +5,11 @@ export {
   parseBridgeRegistryRecord,
   type ListBridgeRecordsOptions
 } from './registry/read';
+export {
+  watchBridgeRegistry,
+  type WatchBridgeRegistryHandle,
+  type WatchBridgeRegistryOptions
+} from './registry/watch';
 export { FsBridgePublisher } from './publisher/BridgePublisher';
 export { syncHubBundle } from './publisher/HubBundleSync';
 export {

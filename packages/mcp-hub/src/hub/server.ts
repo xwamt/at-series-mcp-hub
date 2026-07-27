@@ -12,6 +12,10 @@ import type {
 } from '../protocol/index';
 import { listBridgeRecords } from '../registry/read';
 import {
+  watchBridgeRegistry,
+  type WatchBridgeRegistryHandle
+} from '../registry/watch';
+import {
   aggregateTools,
   orderBridgesForTool,
   type AggregatedCatalog,
@@ -31,6 +35,9 @@ const AT_LIST_PROVIDERS_TOOL: ToolCatalogEntry = {
   inputSchema: { type: 'object', properties: {} }
 };
 
+/** Periodic re-health interval (protocol §8.4: unhealthy 3–5s, healthy ≤15s). */
+const HEALTH_REFRESH_INTERVAL_MS = 5000;
+
 export type HubRuntime = {
   refreshCatalog: () => Promise<
     AggregatedCatalog & { providers: ListProvidersResult }
@@ -46,6 +53,13 @@ export type HubRuntime = {
   getServer?: () => McpServer;
   close: () => Promise<void>;
 };
+
+function catalogToolsFingerprint(tools: ToolCatalogEntry[]): string {
+  return tools
+    .map((t) => t.name)
+    .sort()
+    .join('\0');
+}
 
 function connectedTargetsForBridge(
   health: { connectedTargets?: number } | undefined,
@@ -79,6 +93,8 @@ export async function createHubRuntime(options: {
   home?: string;
   hostApp: string;
   hubVersion: string;
+  /** Invoked when the aggregated tool-name set changes (after baseline). */
+  onToolsListChanged?: () => void;
 }): Promise<HubRuntime> {
   const hostApp = options.hostApp as HostApp;
   let healthyBridges: HealthyBridge[] = [];
@@ -95,6 +111,11 @@ export async function createHubRuntime(options: {
     unhealthy: [],
     conflicts: []
   });
+  /** `undefined` until the first successful refresh establishes a baseline. */
+  let toolsFingerprint: string | undefined;
+  let closed = false;
+  let registryWatch: WatchBridgeRegistryHandle | undefined;
+  let healthTimer: ReturnType<typeof setInterval> | undefined;
 
   async function refreshCatalog(): Promise<
     AggregatedCatalog & { providers: ListProvidersResult }
@@ -138,6 +159,18 @@ export async function createHubRuntime(options: {
       unhealthy: unhealthyBridges,
       conflicts: catalog.conflicts
     });
+
+    const nextFingerprint = catalogToolsFingerprint(catalog.tools);
+    if (toolsFingerprint === undefined) {
+      toolsFingerprint = nextFingerprint;
+    } else if (nextFingerprint !== toolsFingerprint) {
+      toolsFingerprint = nextFingerprint;
+      try {
+        options.onToolsListChanged?.();
+      } catch {
+        // Notification failures must not break catalog refresh.
+      }
+    }
 
     return { ...catalog, providers: providersResult };
   }
@@ -220,8 +253,37 @@ export async function createHubRuntime(options: {
   }
 
   async function close(): Promise<void> {
-    // No persistent resources yet; Task 10 adds registry watch handles.
+    closed = true;
+    registryWatch?.close();
+    registryWatch = undefined;
+    if (healthTimer !== undefined) {
+      clearInterval(healthTimer);
+      healthTimer = undefined;
+    }
   }
+
+  // Establish fingerprint baseline before watch/timers so startup is quiet.
+  await refreshCatalog();
+
+  registryWatch = watchBridgeRegistry({
+    hostApp: options.hostApp,
+    home: options.home,
+    onChange: () => {
+      if (closed) {
+        return;
+      }
+      void refreshCatalog();
+    }
+  });
+
+  healthTimer = setInterval(() => {
+    if (closed) {
+      return;
+    }
+    void refreshCatalog();
+  }, HEALTH_REFRESH_INTERVAL_MS);
+  // Allow process exit while the timer is the only live handle (tests / short runs).
+  healthTimer.unref?.();
 
   return {
     refreshCatalog,
