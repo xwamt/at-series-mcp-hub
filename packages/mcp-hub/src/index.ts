@@ -32,4 +32,19 @@ export {
   type UnhealthyBridgeInput
 } from './hub/listProviders';
 export { createHubRuntime, type HubRuntime } from './hub/server';
-export { defaultAutoApproveToolNames } from './installer/autoApprove';
+export {
+  defaultAutoApproveToolNames,
+  ensureAtSeriesMcpConfig,
+  uninstallAtSeriesMcpConfig,
+  stripLegacyAtMcpServers,
+  isLegacyAtMcpServerEntry,
+  LEGACY_AT_MCP_SERVER_NAMES,
+  LEGACY_CONTINUE_YAML_FILENAMES,
+  normalizeMcpPath,
+  cursorMcpConfigPath,
+  kiroMcpConfigPath,
+  continueMcpConfigPath,
+  type McpInstallerTarget,
+  type EnsureAtSeriesMcpConfigInput,
+  type UninstallAtSeriesMcpConfigInput
+} from './installer/index';
