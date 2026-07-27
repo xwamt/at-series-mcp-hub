@@ -6,7 +6,7 @@ This repository is the **single source of truth** for:
 
 - Bridge registration protocol
 - Hub runtime contract
-- TypeScript protocol package (`@at-series/mcp-hub` protocol types)
+- TypeScript package `@at-series/mcp-hub` (protocol types live under `packages/mcp-hub/src/protocol`)
 - Series-level MCP skill (planned)
 
 ## Status
@@ -22,7 +22,7 @@ Design / contract phase. Implementation follows `docs/protocol/v1.md`.
 | [docs/protocol/v1.md](docs/protocol/v1.md) | **Normative** interface specification (start here for new plugins) |
 | [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) | Plugin integration checklist |
 | [docs/decisions/ADR-001-at-series-mcp-hub.md](docs/decisions/ADR-001-at-series-mcp-hub.md) | Architecture decision record |
-| [packages/protocol/src/index.ts](packages/protocol/src/index.ts) | Typed contracts mirroring v1 |
+| [packages/mcp-hub/src/protocol/index.ts](packages/mcp-hub/src/protocol/index.ts) | Typed contracts mirroring v1 (`@at-series/mcp-hub`) |
 
 ## Product model (summary)
 

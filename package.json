@@ -1,0 +1,11 @@
+{
+  "name": "at-series-mcp-hub-workspace",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "npm test -w @at-series/mcp-hub",
+    "build": "npm run build -w @at-series/mcp-hub",
+    "build:hub": "npm run build:hub -w @at-series/mcp-hub",
+    "typecheck": "npm run typecheck -w @at-series/mcp-hub"
+  }
+}

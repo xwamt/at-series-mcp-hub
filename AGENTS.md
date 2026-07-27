@@ -43,7 +43,7 @@
 **同一变更集内必须同时更新：**
 
 1. `docs/protocol/v1.md`（规范正文；破坏性变更还须升高 `protocolVersion` 并写清迁移）
-2. 包内协议类型（现 `packages/protocol`，目标并入 `@at-series/mcp-hub` 导出）
+2. 包内协议类型（`packages/mcp-hub/src/protocol`，由 `@at-series/mcp-hub` 导出）
 3. 若影响接入步骤：`docs/guides/plugin-integration.md`
 4. 若影响产品范围/验收：`docs/requirements.md`
 
@@ -64,7 +64,7 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 
 | 模块 | 职责 |
 |------|------|
-| protocol | 类型、常量、risk/autoApprove 纯函数（现有 `packages/protocol` 并入此包导出） |
+| protocol | 类型、常量、risk/autoApprove 纯函数（`packages/mcp-hub/src/protocol`，由此包导出） |
 | registry / publisher | 读写 `~/.at-series/bridges/<hostApp>/<bridgeId>.json`；heartbeat；unpublish |
 | hub runtime | stdio MCP；聚合 `tools/list`；路由 `tools/call`；`at_list_providers`；watch + `list_changed` |
 | hub bundle sync | 选举写入 `~/.at-series/mcp/hub.js` + `hub-version.json` |
@@ -93,7 +93,7 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 
 ## 4. 建议仓库布局（目标态）
 
-当前几乎只有协议类型；实现时收敛为单一包（名称可微调，边界不能破）：
+单一包布局（边界不能破）：
 
 ```text
 at-series-mcp-hub/
@@ -106,7 +106,7 @@ at-series-mcp-hub/
     decisions/ADR-001-*.md
   packages/mcp-hub/          # @at-series/mcp-hub
     src/
-      protocol/              # 自 packages/protocol 迁入
+      protocol/              # v1 typed contracts
       registry/
       publisher/
       hub/                   # stdio MCP runtime

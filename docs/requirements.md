@@ -281,7 +281,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | `protocol/v1.md` | 接口/字段/行为规范（实现契约） |
 | `guides/plugin-integration.md` | 新插件怎么接入 |
 | `decisions/ADR-001-*.md` | 为什么选这套架构 |
-| `packages/protocol/src/index.ts` | 类型化契约（将并入单一 `@at-series/mcp-hub` 包导出） |
+| `packages/mcp-hub/src/protocol/index.ts` | 类型化契约（由 `@at-series/mcp-hub` 导出） |
 
 修订规则：
 
