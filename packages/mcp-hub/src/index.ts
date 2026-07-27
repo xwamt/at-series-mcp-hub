@@ -22,3 +22,7 @@ export {
   type AggregatedCatalog,
   type HealthyBridge
 } from './hub/aggregate';
+export {
+  buildListProvidersResult,
+  type UnhealthyBridgeInput
+} from './hub/listProviders';
