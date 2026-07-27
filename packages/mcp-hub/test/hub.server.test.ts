@@ -186,4 +186,93 @@ describe('createHubRuntime', () => {
       await bridge.close();
     }
   });
+
+  it('coalesces overlapping refreshCatalog so a slow stale pass cannot resurrect deleted tools', async () => {
+    let holdHealth = false;
+    const healthWaiters: Array<() => void> = [];
+
+    const bridge = await startFakeBridge({
+      bridgeId: 'term-bridge',
+      pluginId: 'at.terminal',
+      tools: [tool('list_ssh_servers')],
+      beforeHealth: () => {
+        if (!holdHealth) {
+          return;
+        }
+        return new Promise<void>((resolve) => {
+          healthWaiters.push(resolve);
+        });
+      }
+    });
+
+    try {
+      const publisher = new FsBridgePublisher({
+        home,
+        bridgeId: 'term-bridge',
+        hostApp
+      });
+      await publisher.publish(
+        baseRecord({
+          bridgeId: 'term-bridge',
+          port: bridge.port,
+          token: bridge.token,
+          tools: [tool('list_ssh_servers')]
+        })
+      );
+
+      const runtime = await createHubRuntime({ home, hostApp, hubVersion });
+
+      holdHealth = true;
+      // Start a refresh that will see the bridge, then stall in /health.
+      const slowRefresh = runtime.refreshCatalog();
+      await new Promise<void>((resolve, reject) => {
+        const started = Date.now();
+        const tick = () => {
+          if (healthWaiters.length >= 1) {
+            resolve();
+            return;
+          }
+          if (Date.now() - started > 5000) {
+            reject(new Error('timed out waiting for health gate'));
+            return;
+          }
+          setTimeout(tick, 10);
+        };
+        tick();
+      });
+
+      await publisher.unpublish();
+
+      // Concurrent refresh after delete; without serialization the slow pass can
+      // finish later and overwrite the empty catalog with stale tools.
+      const afterDelete = runtime.refreshCatalog();
+
+      // Allow the in-flight (stale) pass to finish; any coalesced follow-up must
+      // not block on health again.
+      holdHealth = false;
+      for (const release of healthWaiters.splice(0)) {
+        release();
+      }
+
+      const [slowResult, afterResult] = await Promise.all([
+        slowRefresh,
+        afterDelete
+      ]);
+
+      // Both callers must observe the post-delete catalog (latest intent wins).
+      // Without refresh serialization, the slow in-flight pass returns stale tools.
+      expect(slowResult.tools.map((t) => t.name)).not.toContain('list_ssh_servers');
+      expect(afterResult.tools.map((t) => t.name)).not.toContain(
+        'list_ssh_servers'
+      );
+
+      await runtime.close();
+    } finally {
+      holdHealth = false;
+      for (const release of healthWaiters.splice(0)) {
+        release();
+      }
+      await bridge.close();
+    }
+  });
 });

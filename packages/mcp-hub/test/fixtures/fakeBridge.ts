@@ -19,6 +19,8 @@ export type FakeBridgeOptions = {
   pluginVersion?: string;
   hostApp?: HostApp;
   tools?: ToolCatalogEntry[];
+  /** Optional hook before /health responds (for refresh-race tests). */
+  beforeHealth?: () => void | Promise<void>;
   /** Custom invoke handler; default echoes success for known tools. */
   onInvoke?: (
     req: BridgeInvokeRequest
@@ -112,6 +114,11 @@ export async function startFakeBridge(
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/health') {
+      try {
+        await options.beforeHealth?.();
+      } catch {
+        // Ignore hook failures; still return healthy for fixture simplicity.
+      }
       const body: BridgeHealthResponse = {
         ok: true,
         protocolVersion: AT_SERIES_PROTOCOL_VERSION,

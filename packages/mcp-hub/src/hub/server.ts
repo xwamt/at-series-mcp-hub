@@ -117,7 +117,13 @@ export async function createHubRuntime(options: {
   let registryWatch: WatchBridgeRegistryHandle | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
 
-  async function refreshCatalog(): Promise<
+  /** Shared in-flight refresh; coalesces concurrent callers onto one trailing pass. */
+  let refreshShared:
+    | Promise<AggregatedCatalog & { providers: ListProvidersResult }>
+    | undefined;
+  let refreshQueued = false;
+
+  async function refreshCatalogOnce(): Promise<
     AggregatedCatalog & { providers: ListProvidersResult }
   > {
     const records = await listBridgeRecords({
@@ -173,6 +179,27 @@ export async function createHubRuntime(options: {
     }
 
     return { ...catalog, providers: providersResult };
+  }
+
+  async function refreshCatalog(): Promise<
+    AggregatedCatalog & { providers: ListProvidersResult }
+  > {
+    refreshQueued = true;
+    if (!refreshShared) {
+      refreshShared = (async () => {
+        let result!: AggregatedCatalog & { providers: ListProvidersResult };
+        try {
+          while (refreshQueued) {
+            refreshQueued = false;
+            result = await refreshCatalogOnce();
+          }
+          return result;
+        } finally {
+          refreshShared = undefined;
+        }
+      })();
+    }
+    return refreshShared;
   }
 
   async function listToolsForMcp(): Promise<ToolCatalogEntry[]> {
