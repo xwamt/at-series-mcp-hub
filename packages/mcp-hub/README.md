@@ -12,7 +12,7 @@ npm install @at-series/mcp-hub
 
 | Export | Role |
 |--------|------|
-| Protocol types / constants / path helpers | Contracts from `docs/protocol/v1.md` |
+| Protocol types / constants / path helpers | Contracts in `src/protocol` (re-exported from package root) |
 | `FsBridgePublisher` | Publish / heartbeat / unpublish registry records |
 | `syncHubBundle` | Elect `~/.at-series/mcp/hub.js` by semver + hash |
 | `ensureAtSeriesMcpConfig` / `uninstallAtSeriesMcpConfig` | Write/repair/remove the single `AT Series` MCP entry |
@@ -28,8 +28,6 @@ require.resolve('@at-series/mcp-hub/hub')
 
 ## Docs
 
-- Normative protocol: [`docs/protocol/v1.md`](../../docs/protocol/v1.md)
-- Integration guide: [`docs/guides/plugin-integration.md`](../../docs/guides/plugin-integration.md)
 - Agent rules: [`AGENTS.md`](../../AGENTS.md)
 - Repo quick start: [`README.md`](../../README.md)
 

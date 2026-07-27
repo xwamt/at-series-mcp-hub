@@ -1,137 +1,168 @@
-# @at-series/mcp-hub
+# AT Series MCP Hub
 
-AT Series shared MCP Hub: one stdio MCP entry for all AT-family IDE plugins.
+把 AT 系列 IDE 插件的 MCP 入口收成 **一条**：`AT Series` → `~/.at-series/mcp/hub.js`。
 
-This repository is the **single source of truth** for:
+各能力插件（SSH / JumpServer / 未来新产品）在扩展宿主内跑自己的 Bridge，向 Hub **注册工具**；Hub 只负责聚合 `tools/list`、路由 `tools/call`、监听 registry。凭据、确认弹窗、业务逻辑仍留在插件内。
 
-- Bridge registration protocol
-- Hub runtime contract
-- TypeScript package `@at-series/mcp-hub` (`packages/mcp-hub`)
-- Series-level MCP skill (planned, P1)
+| | |
+|---|---|
+| npm 包 | `@at-series/mcp-hub` `0.1.0`（`packages/mcp-hub`） |
+| 契约类型 | [`packages/mcp-hub/src/protocol`](packages/mcp-hub/src/protocol)（随包导出） |
+| 当前阶段 | **P0a 已完成**：Hub 运行时 + publisher + installer；插件迁移见 P0b/P0c |
 
-## Status
+## 架构
 
-**P0a** — protocol, registry, publisher, hub runtime, and installer helpers are implemented under `packages/mcp-hub`. Plugin migrations (P0b/P0c) consume this package.
-
-## Docs
-
-| Doc | Purpose |
-|-----|---------|
-| [AGENTS.md](AGENTS.md) | **Agent implementation guide** (this repo + plugin migration checklists) |
-| [docs/requirements.md](docs/requirements.md) | **Grilled product requirements** (decisions, scope, acceptance) |
-| [docs/protocol/v1.md](docs/protocol/v1.md) | **Normative** interface specification (start here for new plugins) |
-| [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) | Plugin integration checklist |
-| [docs/decisions/ADR-001-at-series-mcp-hub.md](docs/decisions/ADR-001-at-series-mcp-hub.md) | Architecture decision record |
-| [packages/mcp-hub/src/protocol/index.ts](packages/mcp-hub/src/protocol/index.ts) | Typed contracts mirroring v1 (`@at-series/mcp-hub`) |
-
-## Product model (summary)
-
-- IDE configures **one** MCP server: `AT Series` -> `~/.at-series/mcp/hub.js`
-- Each capability plugin runs a localhost **Bridge** in the extension host
-- Plugins publish bridge records under `~/.at-series/bridges/<hostApp>/`
-- Hub aggregates tools dynamically and routes `tools/call` via `POST /invoke`
-- Credentials, confirmations, and domain logic stay inside plugins
-
-## Quick start (plugin authors)
-
-### 1. Depend on the package
-
-```json
-{
-  "dependencies": {
-    "@at-series/mcp-hub": "^0.1.0"
-  }
-}
+```text
+IDE MCP Client (Cursor / Kiro / Continue / …)
+        │  stdio  MCP server name: "AT Series"
+        ▼
+~/.at-series/mcp/hub.js          ← @at-series/mcp-hub 打包的单文件入口
+        │  读 registry + HTTP
+        ▼
+~/.at-series/bridges/<hostApp>/<bridgeId>.json
+        │
+        ▼
+插件 Bridge  127.0.0.1:<port>
+  GET /health · GET /tools · POST /invoke
+        │
+        ▼
+插件域服务（SSH / JumpServer / …）+ 确认 / 凭据
 ```
 
-During local development you may use a workspace/`file:` dependency until the package is published.
+**边界（本仓不做）：** 不提供通用 Bridge HTTP 框架；不实现 SSH/JumpServer 业务；不把确认 UI 搬进 Hub；不按插件写死工具清单。
 
-### 2. Sync Hub bundle on activate
+## 已实现能力（P0a）
 
-Ship the packaged hub (`dist/hub.js` from this package) inside your VSIX, then elect it into the stable path:
+| 模块 | 职责 | 主要 API |
+|------|------|----------|
+| **protocol** | 类型、常量、risk/autoApprove 纯函数、路径助手 | `AT_SERIES_PROTOCOL_VERSION`、`BridgeRegistryRecord`、`hubJsPath()` … |
+| **registry** | 读/校验 `bridges/<hostApp>/*.json`；目录 watch | `listBridgeRecords`、`watchBridgeRegistry` |
+| **publisher** | 写 registry；心跳；卸载自身记录；选举写入 `hub.js` | `FsBridgePublisher`、`syncHubBundle` |
+| **hub runtime** | stdio MCP：聚合工具、路由 invoke、`at_list_providers`、`list_changed` | `createHubRuntime`；产物 `dist/hub.js`（`@at-series/mcp-hub/hub`） |
+| **installer** | 写/修/卸 **`AT Series`**；迁移旧 AT 条目；按 `risk=read` 算 autoApprove | `ensureAtSeriesMcpConfig`、`uninstallAtSeriesMcpConfig`、`defaultAutoApproveToolNames` |
 
-```ts
-import { syncHubBundle, hubJsPath } from '@at-series/mcp-hub';
+覆盖 IDE：Cursor（`~/.cursor/mcp.json`）、Kiro、Continue（workspace `.continue/mcpServers/`）。
 
-// Prefer the dedicated package export (CJS):
-const bundledHub = require.resolve('@at-series/mcp-hub/hub');
-// equivalent: .../node_modules/@at-series/mcp-hub/dist/hub.js
+测试：`npm test`（含协议一致性、双插件聚合、选路、hostApp 隔离、hub 版本选举、installer 迁移等）。
 
-await syncHubBundle({
-  version: '0.1.0', // hub package semver you ship
-  bundlePath: bundledHub,
-  pluginId: 'at.example',
-  pluginVersion: '1.2.3'
-});
+## 新插件怎么接入
 
-const hubPath = hubJsPath(); // ~/.at-series/mcp/hub.js
+契约以包导出类型与本 README 为准（`import … from '@at-series/mcp-hub'`）。
+
+最小闭环：
+
+1. 实现 Bridge：`127.0.0.1` + `x-at-series-token` + `GET /health` / `GET /tools` / `POST /invoke`
+2. `publish` registry 到 `~/.at-series/bridges/<hostApp>/<bridgeId>.json`（`protocolVersion: 1`，工具带 `risk`）
+3. MCP 变体：`syncHubBundle` 选举 `hub.js`，`ensureAtSeriesMcpConfig` 只写 **`AT Series`**
+4. deactivate 时 `unpublish`（只删自己的 registry；**不**删 `hub.js`、**不**卸 MCP 配置）
+
+### 依赖
+
+```bash
+npm install @at-series/mcp-hub
+# 本地联调可用 file: / workspace 依赖，直至 npm 发版
 ```
 
-Election rules: higher semver wins; same semver with different `bundleSha256` overwrites (hotfix); lower semver never downgrades.
-
-### 3. Publish Bridge lifecycle
-
-Implement Bridge HTTP yourself (`GET /health`, `GET /tools`, `POST /invoke`). Use the publisher only for registry files:
+### activate 示例
 
 ```ts
 import {
   FsBridgePublisher,
+  syncHubBundle,
+  ensureAtSeriesMcpConfig,
+  hubJsPath,
   AT_SERIES_PROTOCOL_VERSION,
-  type BridgeRegistryRecord
+  type BridgeRegistryRecord,
+  type ToolCatalogEntry
 } from '@at-series/mcp-hub';
 
-const publisher = new FsBridgePublisher({
-  bridgeId: 'window-1',
-  hostApp: 'cursor'
+const bridgeId = crypto.randomUUID(); // MUST be UUID
+const hostApp = 'cursor';
+const tools: ToolCatalogEntry[] = [
+  {
+    name: 'example_ping',
+    title: 'Example Ping',
+    description: 'Connectivity check.',
+    risk: 'read',
+    inputSchema: { type: 'object', properties: {} }
+  }
+];
+
+await syncHubBundle({
+  version: '0.1.0', // 所打包的 hub 包 semver
+  bundlePath: require.resolve('@at-series/mcp-hub/hub'),
+  pluginId: 'at.example',
+  pluginVersion: '1.2.3'
 });
 
+await ensureAtSeriesMcpConfig({
+  target: 'cursor', // 'kiro' | 'continue'（continue 须传 workspaceFolder）
+  hostApp,
+  hubJsAbsolutePath: hubJsPath(),
+  registryTools: tools
+});
+// 可选：defaultAutoApproveToolNames({ registryTools: tools })
+
+const publisher = new FsBridgePublisher({ bridgeId, hostApp });
 const record: BridgeRegistryRecord = {
   protocolVersion: AT_SERIES_PROTOCOL_VERSION,
-  bridgeId: 'window-1',
+  bridgeId,
   pluginId: 'at.example',
   pluginDisplayName: 'AT Example',
   pluginVersion: '1.2.3',
-  hostApp: 'cursor',
+  hostApp,
   port: 43123,
-  token: '...', // never log in plaintext
+  token: '<high-entropy-secret>', // 禁止明文日志
   pid: process.pid,
   updatedAt: Date.now(),
-  tools: [/* ToolCatalogEntry[] with risk */]
+  tools
 };
-
 await publisher.publish(record);
-// every <= 30s:
-await publisher.heartbeat();
-// on deactivate:
-await publisher.unpublish(); // deletes only your registry file
+// 存活期间每 ≤30s: await publisher.heartbeat();
+// deactivate: await publisher.unpublish();
 ```
 
-### 4. Ensure IDE MCP config
+**Hub 版本选举：** semver 更高 → 覆盖；同版本且 `bundleSha256` 不同 → 覆盖（热修）；同版本同 hash → no-op；更低 → 禁止覆盖。
 
-Write/repair the single **`AT Series`** entry (migrates legacy AT Terminal / JumpServer names; does not delete third-party servers):
+**autoApprove：** 仅 `risk=read` + 内置 `at_list_providers`；`write`/`exec` 必须在插件内确认。
 
-```ts
-import {
-  ensureAtSeriesMcpConfig,
-  defaultAutoApproveToolNames,
-  hubJsPath
-} from '@at-series/mcp-hub';
+**不要：** 再写 per-plugin `mcp-server.js` 作为产品入口；不要注册 `languageModelTools` 暴露同一批工具。
 
-await ensureAtSeriesMcpConfig({
-  target: 'cursor', // or 'kiro' | 'continue'
-  hostApp: 'cursor',
-  hubJsAbsolutePath: hubJsPath(),
-  registryTools: myTools // used to compute read-only autoApprove
-});
+## 本仓开发
 
-// autoApprove = risk=read tools + at_list_providers
-const autoApprove = defaultAutoApproveToolNames(myTools);
+```bash
+npm install
+npm run build          # tsc → packages/mcp-hub/dist
+npm run build:hub      # esbuild → dist/hub.js（e2e / 打包进 VSIX 需要）
+npm test
+npm run typecheck
 ```
 
-### 5. Read the contracts
+仓库布局：
 
-1. [docs/protocol/v1.md](docs/protocol/v1.md) — normative fields and behavior
-2. [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) — checklist
-3. [AGENTS.md](AGENTS.md) — migration rules and anti-patterns
+```text
+at-series-mcp-hub/
+  AGENTS.md
+  README.md
+  packages/mcp-hub/          # @at-series/mcp-hub
+    src/{protocol,registry,publisher,hub,installer,bridgeClient}/
+    test/
+```
 
-Do **not** ship a separate per-plugin MCP stdio server or `languageModelTools` for the same tools.
+## 相关说明
+
+| 文件 | 用途 |
+|------|------|
+| [AGENTS.md](AGENTS.md) | Agent / 迁移约定与检查清单 |
+| [packages/mcp-hub/README.md](packages/mcp-hub/README.md) | 包导出面说明 |
+| [packages/mcp-hub/src/protocol](packages/mcp-hub/src/protocol) | 协议类型与常量 |
+
+## 路线图
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| **P0a** | 本仓 Hub 包 + 协议一致性测试 | 完成 |
+| **P0b** | `ssh-plugins`（AT Terminal）接入 Hub | 计划中 |
+| **P0c** | `jumpserver-plugins` 接入；补 exec 确认 | 计划中 |
+| **P1** | `list_changed` 打磨、Repair/Uninstall UX、系列 skill | 未开始 |
+| **P2** | 工具命名统一前缀（另开需求） | 未开始 |
