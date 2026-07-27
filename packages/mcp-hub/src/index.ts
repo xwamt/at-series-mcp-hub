@@ -14,3 +14,11 @@ export {
   bridgeInvoke,
   type BridgeClientRecord
 } from './bridgeClient/http';
+export {
+  aggregateTools,
+  orderBridgesForTool,
+  pickBridgeForTool,
+  scoreBridge,
+  type AggregatedCatalog,
+  type HealthyBridge
+} from './hub/aggregate';
