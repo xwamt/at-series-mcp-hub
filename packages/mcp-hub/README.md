@@ -28,9 +28,17 @@ require.resolve('@at-series/mcp-hub/hub')
 
 ## Docs
 
-- Agent rules: [`AGENTS.md`](../../AGENTS.md)
-- Repo quick start: [`README.md`](../../README.md)
+Integrate against the published protocol — do not reverse-engineer Hub internals:
+
+| Doc | Role |
+|-----|------|
+| [`docs/protocol/v1.md`](../../docs/protocol/v1.md) | **Normative interface contract** (registry, Bridge HTTP, Hub routing, MCP config) |
+| [`docs/guides/plugin-integration.md`](../../docs/guides/plugin-integration.md) | Step-by-step plugin integration |
+| [`docs/requirements.md`](../../docs/requirements.md) | Product scope and acceptance |
+| [`docs/decisions/ADR-001-at-series-mcp-hub.md`](../../docs/decisions/ADR-001-at-series-mcp-hub.md) | Architecture rationale |
+| [`AGENTS.md`](../../AGENTS.md) | Repo agent / migration conventions |
+| [`README.md`](../../README.md) | Repo overview and activate example |
 
 ## Note
 
-This package does **not** include a Bridge HTTP framework. Plugins implement `GET /health`, `GET /tools`, and `POST /invoke` themselves.
+This package does **not** include a Bridge HTTP framework. Plugins implement `GET /health`, `GET /tools`, and `POST /invoke` themselves per [`docs/protocol/v1.md`](../../docs/protocol/v1.md).
