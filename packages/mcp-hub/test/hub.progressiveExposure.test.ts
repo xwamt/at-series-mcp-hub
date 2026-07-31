@@ -58,10 +58,10 @@ describe('createHubRuntime progressive tool exposure', () => {
   }
 
   async function start(options: {
-    discoveryMode: 'auto' | 'always' | 'off';
+    discoveryMode?: 'auto' | 'always' | 'off';
     discoveryThreshold?: number;
     onToolsListChanged?: () => void;
-  }): Promise<HubRuntime> {
+  } = {}): Promise<HubRuntime> {
     runtime = await createHubRuntime({
       home,
       hostApp: 'cursor',
@@ -106,7 +106,13 @@ describe('createHubRuntime progressive tool exposure', () => {
 
   it('clearing selection returns to meta tools only', async () => {
     await publishBridge([tool('list_ssh_servers')]);
-    const hub = await start({ discoveryMode: 'always' });
+    let notifications = 0;
+    const hub = await start({
+      discoveryMode: 'always',
+      onToolsListChanged: () => {
+        notifications++;
+      }
+    });
     await hub.callTool('at_select_tools', { names: ['list_ssh_servers'] });
 
     const result = await hub.callTool('at_clear_tool_selection', {});
@@ -115,6 +121,33 @@ describe('createHubRuntime progressive tool exposure', () => {
     expect((await hub.listToolsForMcp()).map((entry) => entry.name).sort()).toEqual(
       [...HUB_BUILTIN_TOOL_NAMES].sort()
     );
+    expect(notifications).toBe(2);
+  });
+
+  it('uses discovery environment fallback when no options are provided', async () => {
+    const previousMode = process.env.AT_SERIES_TOOL_DISCOVERY;
+    const previousThreshold = process.env.AT_SERIES_TOOL_DISCOVERY_THRESHOLD;
+    process.env.AT_SERIES_TOOL_DISCOVERY = 'always';
+    process.env.AT_SERIES_TOOL_DISCOVERY_THRESHOLD = '0';
+    try {
+      await publishBridge([tool('list_ssh_servers')]);
+      const hub = await start();
+
+      expect((await hub.listToolsForMcp()).map((entry) => entry.name).sort()).toEqual(
+        [...HUB_BUILTIN_TOOL_NAMES].sort()
+      );
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env.AT_SERIES_TOOL_DISCOVERY;
+      } else {
+        process.env.AT_SERIES_TOOL_DISCOVERY = previousMode;
+      }
+      if (previousThreshold === undefined) {
+        delete process.env.AT_SERIES_TOOL_DISCOVERY_THRESHOLD;
+      } else {
+        process.env.AT_SERIES_TOOL_DISCOVERY_THRESHOLD = previousThreshold;
+      }
+    }
   });
 
   it('auto mode exposes the full catalog at its threshold', async () => {
@@ -136,6 +169,24 @@ describe('createHubRuntime progressive tool exposure', () => {
 
     expect((await hub.listToolsForMcp()).map((entry) => entry.name).sort()).toEqual(
       [...HUB_BUILTIN_TOOL_NAMES].sort()
+    );
+  });
+
+  it('off mode exposes the full business catalog regardless of size', async () => {
+    await publishBridge([
+      tool('get_ssh_server'),
+      tool('list_ssh_servers'),
+      tool('run_remote_command')
+    ]);
+    const hub = await start({ discoveryMode: 'off', discoveryThreshold: 0 });
+
+    expect((await hub.listToolsForMcp()).map((entry) => entry.name).sort()).toEqual(
+      [
+        ...HUB_BUILTIN_TOOL_NAMES,
+        'get_ssh_server',
+        'list_ssh_servers',
+        'run_remote_command'
+      ].sort()
     );
   });
 
@@ -173,5 +224,39 @@ describe('createHubRuntime progressive tool exposure', () => {
       ...tool('list_ssh_servers'),
       pluginId: 'at.terminal'
     });
+  });
+
+  it('reserves meta tool names for Hub handlers', async () => {
+    await publishBridge([tool('at_search_tools')]);
+    const hub = await start({ discoveryMode: 'off' });
+
+    expect(
+      (await hub.listToolsForMcp()).filter((entry) => entry.name === 'at_search_tools')
+    ).toHaveLength(1);
+
+    const result = await hub.callTool('at_search_tools', {});
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'query must be a non-empty string'
+      }
+    });
+  });
+
+  it('validates malformed discovery builtin arguments', async () => {
+    await publishBridge([tool('list_ssh_servers')]);
+    const hub = await start({ discoveryMode: 'always' });
+
+    for (const [name, args] of [
+      ['at_search_tools', {}],
+      ['at_get_tool', {}],
+      ['at_select_tools', {}],
+      ['at_select_tools', { names: ['list_ssh_servers'], mode: 'remove' }]
+    ] as const) {
+      const result = await hub.callTool(name, args);
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0]!.text).error.code).toBe('VALIDATION_ERROR');
+    }
   });
 });

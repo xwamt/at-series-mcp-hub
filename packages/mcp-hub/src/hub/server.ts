@@ -33,6 +33,7 @@ import {
 import {
   buildToolsByPluginId,
   computeExposedBusinessTools,
+  META_TOOL_NAMES,
   parseToolDiscoveryMode,
   parseToolDiscoveryThreshold,
   resolveSelectTools,
@@ -260,6 +261,8 @@ export async function createHubRuntime(options: {
         } catch {
           // Fall back to registry snapshot when live catalog fetch fails.
         }
+        // Hub builtins are reserved: they never become Bridge routing winners.
+        tools = tools.filter(({ name }) => !META_TOOL_NAMES.has(name));
 
         nextHealthy.push({
           record,
@@ -409,6 +412,16 @@ export async function createHubRuntime(options: {
         return errorText(
           'VALIDATION_ERROR',
           'pluginIds and names must contain only non-empty strings'
+        );
+      }
+      if (
+        selectionArgs.mode !== undefined &&
+        selectionArgs.mode !== 'add' &&
+        selectionArgs.mode !== 'replace'
+      ) {
+        return errorText(
+          'VALIDATION_ERROR',
+          'mode must be either "add" or "replace"'
         );
       }
       if (
