@@ -15,7 +15,11 @@ import {
   uninstallAtSeriesMcpConfig,
   defaultAutoApproveToolNames
 } from '../src/installer/index';
-import { MCP_SERVER_DISPLAY_NAME, AT_SERIES_HOST_APP_ENV } from '../src/protocol/index';
+import {
+  MCP_SERVER_DISPLAY_NAME,
+  AT_SERIES_HOST_APP_ENV,
+  HUB_BUILTIN_TOOL_NAMES
+} from '../src/protocol/index';
 import { hubJsPath, hubVersionPath } from '../src/protocol/paths';
 import { startFakeBridge, type FakeBridgeHandle } from './fixtures/fakeBridge';
 
@@ -178,7 +182,7 @@ describe('P0a e2e functional', () => {
       });
       try {
         const kiroTools = await kiroRuntime.listToolsForMcp();
-        expect(kiroTools.map((t) => t.name)).toEqual(['at_list_providers']);
+        expect(kiroTools.map((t) => t.name)).toEqual([...HUB_BUILTIN_TOOL_NAMES]);
       } finally {
         await kiroRuntime.close();
       }

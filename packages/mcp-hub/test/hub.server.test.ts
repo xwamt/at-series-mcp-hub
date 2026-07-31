@@ -4,7 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { FsBridgePublisher } from '../src/publisher/BridgePublisher';
 import { createHubRuntime } from '../src/hub/server';
-import type { BridgeRegistryRecord, ToolCatalogEntry } from '../src/protocol/index';
+import {
+  HUB_BUILTIN_TOOL_NAMES,
+  type BridgeRegistryRecord,
+  type ToolCatalogEntry
+} from '../src/protocol/index';
 import { startFakeBridge } from './fixtures/fakeBridge';
 
 function tool(name: string): ToolCatalogEntry {
@@ -50,7 +54,7 @@ describe('createHubRuntime', () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it('aggregates disjoint tools from two plugins plus at_list_providers', async () => {
+  it('aggregates disjoint tools from two plugins plus Hub builtins', async () => {
     const terminal = await startFakeBridge({
       bridgeId: 'term-bridge',
       pluginId: 'at.terminal',
@@ -99,11 +103,9 @@ describe('createHubRuntime', () => {
       const tools = await runtime.listToolsForMcp();
       const names = tools.map((t) => t.name).sort();
 
-      expect(names).toEqual([
-        'at_list_providers',
-        'jumpserver_list_assets',
-        'list_ssh_servers'
-      ]);
+      expect(names).toEqual(
+        [...HUB_BUILTIN_TOOL_NAMES, 'jumpserver_list_assets', 'list_ssh_servers'].sort()
+      );
       await runtime.close();
     } finally {
       await terminal.close();
@@ -180,7 +182,7 @@ describe('createHubRuntime', () => {
       const tools = await runtime.listToolsForMcp();
       const names = tools.map((t) => t.name);
 
-      expect(names).toEqual(['at_list_providers']);
+      expect(names).toEqual([...HUB_BUILTIN_TOOL_NAMES]);
       await runtime.close();
     } finally {
       await bridge.close();

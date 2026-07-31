@@ -5,7 +5,11 @@ import path from 'node:path';
 import { FsBridgePublisher } from '../src/publisher/BridgePublisher';
 import { createHubRuntime } from '../src/hub/server';
 import { watchBridgeRegistry } from '../src/registry/watch';
-import type { BridgeRegistryRecord, ToolCatalogEntry } from '../src/protocol/index';
+import {
+  HUB_BUILTIN_TOOL_NAMES,
+  type BridgeRegistryRecord,
+  type ToolCatalogEntry
+} from '../src/protocol/index';
 import { startFakeBridge } from './fixtures/fakeBridge';
 
 function tool(name: string): ToolCatalogEntry {
@@ -144,10 +148,9 @@ describe('registry watch + list_changed', () => {
       });
 
       const before = await runtime.listToolsForMcp();
-      expect(before.map((t) => t.name).sort()).toEqual([
-        'at_list_providers',
-        'list_ssh_servers'
-      ]);
+      expect(before.map((t) => t.name).sort()).toEqual(
+        [...HUB_BUILTIN_TOOL_NAMES, 'list_ssh_servers'].sort()
+      );
 
       onToolsListChanged.mockClear();
       await publisher.unpublish();
@@ -157,7 +160,7 @@ describe('registry watch + list_changed', () => {
       await waitFor(() => onToolsListChanged.mock.calls.length >= 1, 10000);
 
       const after = await runtime.listToolsForMcp();
-      expect(after.map((t) => t.name)).toEqual(['at_list_providers']);
+      expect(after.map((t) => t.name)).toEqual([...HUB_BUILTIN_TOOL_NAMES]);
       expect(onToolsListChanged.mock.calls.length).toBeGreaterThanOrEqual(1);
 
       await runtime.close();

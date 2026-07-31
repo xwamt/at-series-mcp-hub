@@ -144,11 +144,9 @@ describe('protocol v1 §15 conformance', () => {
 
       const runtime = await createHubRuntime({ home, hostApp, hubVersion });
       const names = (await runtime.listToolsForMcp()).map((t) => t.name).sort();
-      expect(names).toEqual([
-        'at_list_providers',
-        'jumpserver_list_assets',
-        'list_ssh_servers'
-      ]);
+      expect(names).toEqual(
+        [...HUB_BUILTIN_TOOL_NAMES, 'jumpserver_list_assets', 'list_ssh_servers'].sort()
+      );
       await runtime.close();
     } finally {
       await terminal.close();
@@ -211,7 +209,7 @@ describe('protocol v1 §15 conformance', () => {
       const runtime = await createHubRuntime({ home, hostApp, hubVersion });
       const names = (await runtime.listToolsForMcp())
         .map((t) => t.name)
-        .filter((n) => n !== 'at_list_providers');
+        .filter((n) => !HUB_BUILTIN_TOOL_NAMES.includes(n as never));
       expect(names).toEqual(['list_ssh_servers']);
 
       const response = await runtime.callTool('list_ssh_servers', {});
@@ -316,7 +314,7 @@ describe('protocol v1 §15 conformance', () => {
 
       const runtime = await createHubRuntime({ home, hostApp, hubVersion });
       const names = (await runtime.listToolsForMcp()).map((t) => t.name);
-      expect(names).toEqual(['at_list_providers']);
+      expect(names).toEqual([...HUB_BUILTIN_TOOL_NAMES]);
       await runtime.close();
     } finally {
       await bridge.close();
@@ -343,7 +341,7 @@ describe('protocol v1 §15 conformance', () => {
 
     const runtime = await createHubRuntime({ home, hostApp, hubVersion });
     const names = (await runtime.listToolsForMcp()).map((t) => t.name);
-    expect(names).toEqual(['at_list_providers']);
+    expect(names).toEqual([...HUB_BUILTIN_TOOL_NAMES]);
     await runtime.close();
   });
 
@@ -379,14 +377,14 @@ describe('protocol v1 §15 conformance', () => {
 
       expect(
         (await runtime.listToolsForMcp()).map((t) => t.name).sort()
-      ).toEqual(['at_list_providers', 'list_ssh_servers']);
+      ).toEqual([...HUB_BUILTIN_TOOL_NAMES, 'list_ssh_servers'].sort());
 
       onToolsListChanged.mockClear();
       await publisher.unpublish();
       await waitFor(() => onToolsListChanged.mock.calls.length >= 1);
 
       expect((await runtime.listToolsForMcp()).map((t) => t.name)).toEqual([
-        'at_list_providers'
+        ...HUB_BUILTIN_TOOL_NAMES
       ]);
       expect(onToolsListChanged.mock.calls.length).toBeGreaterThanOrEqual(1);
       await runtime.close();
