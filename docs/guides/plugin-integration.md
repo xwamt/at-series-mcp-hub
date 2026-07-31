@@ -1,4 +1,4 @@
-﻿# Plugin integration guide (Hub v2, Bridge wire v1)
+﻿# Plugin integration guide (Protocol v1)
 
 This guide is for authors of a **new** AT Series capability plugin.  
 Normative rules: [../protocol/v1.md](../protocol/v1.md)  
@@ -35,7 +35,7 @@ import {
   ensureAtSeriesMcpConfig,
   defaultAutoApproveToolNames,
   hubJsPath,
-  AT_SERIES_BRIDGE_PROTOCOL_VERSION,
+  AT_SERIES_PROTOCOL_VERSION,
   type BridgeRegistryRecord,
   type ToolCatalogEntry
 } from '@at-series/mcp-hub';
@@ -142,7 +142,7 @@ const publisher = new FsBridgePublisher({
 });
 
 const record: BridgeRegistryRecord = {
-  protocolVersion: AT_SERIES_BRIDGE_PROTOCOL_VERSION,
+  protocolVersion: AT_SERIES_PROTOCOL_VERSION,
   bridgeId,
   pluginId: 'at.example',
   pluginDisplayName: 'AT Example',
