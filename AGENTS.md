@@ -1,7 +1,7 @@
 # AGENTS.md — AT Series MCP Hub
 
 本文件指导在本仓库及关联插件迁移中工作的 Agent。  
-**需求真源**仍是 `docs/requirements.md`；**接口契约**仍是 `docs/protocol/v1.md`。本文件不覆盖它们，只规定「怎么做、先做什么、禁止做什么」。
+**需求真源**仍是 `docs/requirements.md`；**接口契约**是 `docs/protocol/v1.md`（Bridge wire）与 `docs/protocol/v2.md`（Hub 渐进暴露）。本文件不覆盖它们，只规定「怎么做、先做什么、禁止做什么」。
 
 关联源码仓（只读对照 / 迁移目标，不在本仓改业务）：
 
@@ -19,17 +19,18 @@
 ## 2. 文档优先级（冲突时）
 
 1. `docs/requirements.md`（产品决策 / 范围 / 验收）
-2. `docs/protocol/v1.md`（字段与行为契约）
-3. `docs/decisions/ADR-001-at-series-mcp-hub.md`（为何如此）
-4. **本文件 `AGENTS.md`**（工程约定与迁移清单）
-5. `docs/guides/plugin-integration.md`（新插件接入）
-6. `packages/*/src` 类型（应与 protocol 同步；漂移时先改文档再改类型）
+2. `docs/protocol/v1.md`（Bridge wire 字段与行为契约）
+3. `docs/protocol/v2.md`（Hub 渐进工具暴露与元工具契约）
+4. `docs/decisions/ADR-001-at-series-mcp-hub.md`（为何如此）
+5. **本文件 `AGENTS.md`**（工程约定与迁移清单）
+6. `docs/guides/plugin-integration.md`（新插件接入）
+7. `packages/*/src` 类型（应与 protocol 同步；漂移时先改文档再改类型）
 
 修订规则：改产品意图 → 先改 requirements；只改接口细节 → 改 protocol；禁止静默偏离已拍板决策。
 
 ### 2.1 接口规范同步（硬门禁）
 
-`docs/protocol/v1.md` 是 **所有 AT 系列插件对接 Hub / Bridge 的唯一规范真源**。插件作者与迁移 PR 必须以该文档（及同步的类型导出）为准，不得靠读 Hub 实现猜接口。
+`docs/protocol/v1.md`（Bridge wire）与 `docs/protocol/v2.md`（Hub exposure）是 **所有 AT 系列插件与 MCP 客户端对接的规范真源**。插件作者与迁移 PR 必须以适用文档（及同步的类型导出）为准，不得靠读 Hub 实现猜接口。
 
 **凡触及下列任一变更，必须在同一变更集内完成文档同步，否则视为未完成：**
 
@@ -42,7 +43,7 @@
 
 **同一变更集内必须同时更新：**
 
-1. `docs/protocol/v1.md`（规范正文；破坏性变更还须升高 `protocolVersion` 并写清迁移）
+1. 适用的 `docs/protocol/v1.md` 和/或 `docs/protocol/v2.md`（规范正文；破坏性变更还须升高相应 `protocolVersion` 并写清迁移）
 2. 包内协议类型（`packages/mcp-hub/src/protocol`，由 `@at-series/mcp-hub` 导出）
 3. 若影响接入步骤：`docs/guides/plugin-integration.md`
 4. 若影响产品范围/验收：`docs/requirements.md`
@@ -50,10 +51,10 @@
 **禁止：**
 
 - 先改 Hub/helper 实现、后补文档（或根本不补）
-- 只改类型/代码注释、不改 `protocol/v1.md`
+- 只改类型/代码注释、不改适用的 protocol 文档
 - 让插件继续按旧文档对接已变更的服务接口
 
-失败模式（必须避免）：服务接口已变，插件仍按旧 `protocol/v1.md` 对接 → 联调失败或静默错误。  
+失败模式（必须避免）：服务接口已变，插件仍按旧 protocol 文档对接 → 联调失败或静默错误。
 PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol 文档 diff；无文档 diff 即不合格。
 
 ---
@@ -66,7 +67,7 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 |------|------|
 | protocol | 类型、常量、risk/autoApprove 纯函数（`packages/mcp-hub/src/protocol`，由此包导出） |
 | registry / publisher | 读写 `~/.at-series/bridges/<hostApp>/<bridgeId>.json`；heartbeat；unpublish |
-| hub runtime | stdio MCP；聚合 `tools/list`；路由 `tools/call`；`at_list_providers`；watch + `list_changed` |
+| hub runtime | stdio MCP；聚合/渐进暴露 `tools/list`；路由 `tools/call`；发现/选择元工具；watch + `list_changed` |
 | hub bundle sync | 选举写入 `~/.at-series/mcp/hub.js` + `hub-version.json` |
 | config installer helper | 写/修/卸 **`AT Series`**；迁移旧条目；按 `risk=read` 算 autoApprove |
 
@@ -102,6 +103,7 @@ at-series-mcp-hub/
   docs/
     requirements.md
     protocol/v1.md
+    protocol/v2.md
     guides/plugin-integration.md
     decisions/ADR-001-*.md
   packages/mcp-hub/          # @at-series/mcp-hub
@@ -138,11 +140,13 @@ at-series-mcp-hub/
 
 未完成 P0a 前，不要在插件仓「先手写一套半兼容 Hub」。插件 PR 应依赖已发布（或 `file:`）的本包版本。
 
+**V2a 渐进 list 无需插件代码改动：** Bridge 仍完整发布 `GET /tools` 与 registry `tools`（wire `protocolVersion: 1`）；Hub 独自控制 discover → select → first-class exposure。
+
 ---
 
 ## 6. 编码与测试约定
 
-1. **契约先行 + 文档同步：** 改行为先对照并更新 `docs/protocol/v1.md`（见 §2.1 硬门禁）；类型与指南同变更集更新；无 protocol diff 不得合入接口变更。
+1. **契约先行 + 文档同步：** 改行为先对照并更新适用的 `docs/protocol/v1.md` / `docs/protocol/v2.md`（见 §2.1 硬门禁）；类型与指南同变更集更新；无 protocol diff 不得合入接口变更。
 2. **错误体：** Bridge/Hub 对外错误用 `{ error: { code, message, details? } }`；不要退回旧的 `{ error: string }`。
 3. **鉴权：** Hub→Bridge 只发 `x-at-series-token`；插件 Bridge 迁移期可兼收旧头。产品侧信任/确认策略留在插件，不上收 Hub。
 4. **安全：** 不落 token 明文日志；`at_list_providers` 打码；工具结果禁止密码/私钥。
@@ -264,8 +268,8 @@ Hub v1 **不读**旧 `~/.at-terminal` / `~/.at-jumpserver-terminal` 路径。
 | 为省事恢复 `languageModelTools` | 产品面已删除 |
 | 同 semver 总是覆盖或永不覆盖 | 按 hash 规则 |
 | 静默改 requirements/protocol 决策 | 先改文档再改代码 |
-| 接口实现已变、`protocol/v1.md` 未同变更集更新 | **硬停**；补齐 §2.1 要求的文档/类型后再继续 |
-| 插件按旧文档对接新接口 | 以最新 `protocol/v1.md` 为准重对接；修文档滞后而非让插件猜实现 |
+| 接口实现已变、适用 protocol 文档未同变更集更新 | **硬停**；补齐 §2.1 要求的文档/类型后再继续 |
+| 插件按旧文档对接新接口 | 以最新适用 protocol 为准重对接；修文档滞后而非让插件猜实现 |
 | 未 grill/未改文档就扩大包边界 | 先更新 requirements D26+ |
 
 ---

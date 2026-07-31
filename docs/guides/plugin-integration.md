@@ -1,7 +1,7 @@
 ﻿# Plugin integration guide (Protocol v1)
 
 This guide is for authors of a **new** AT Series capability plugin.  
-Normative rules: [../protocol/v1.md](../protocol/v1.md)  
+Normative rules: [../protocol/v1.md](../protocol/v1.md) (Bridge wire) and [../protocol/v2.md](../protocol/v2.md) (Hub progressive exposure)
 Product requirements: [../requirements.md](../requirements.md)
 
 ## What you build
@@ -21,6 +21,16 @@ Your extension host
   ├── publish ~/.at-series/bridges/<hostApp>/<bridgeId>.json
   └── (MCP build) sync ~/.at-series/mcp/hub.js
 ```
+
+## Agent tool discovery (Hub v2)
+
+Hub v2 may progressively expose a large tool catalog. The agent flow is:
+
+1. Call `at_list_providers`, then `at_search_tools` (and `at_get_tool` when full schema detail is needed).
+2. Call `at_select_tools` with provider IDs and/or tool names.
+3. Refresh `tools/list` after `notifications/tools/list_changed`, then call selected tools as first-class MCP tools.
+
+Plugins do not implement this flow and MUST NOT pre-filter their catalogs: continue publishing the complete invocable catalog from `GET /tools` and in the registry `tools` snapshot with `protocolVersion: 1`. The Hub owns discovery mode and selection. See [Protocol v2](../protocol/v2.md).
 
 ## Depend on the shared package
 

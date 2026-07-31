@@ -41,7 +41,15 @@ Extract a shared **AT Series MCP Hub** (`@at-series/mcp-hub`) with a normative *
 8. Ship as **one** npm package `@at-series/mcp-hub` (protocol + registry + hub runtime + publisher + MCP config installer helpers). Do **not** ship a shared Bridge HTTP framework — plugins implement Bridge endpoints themselves.
 9. `risk=write|exec` tools MUST keep (or gain) in-plugin confirmation during migration.
 
-Normative details: `docs/protocol/v1.md`.
+Normative Bridge details: `docs/protocol/v1.md`.
+
+### V2 follow-up: progressive tool exposure
+
+Accepted 2026-07-31: when the Hub catalog is large, use a progressive hybrid surface: agents discover providers and tools through Hub meta-tools, select relevant tools, then invoke those selected tools as first-class MCP tools. The Hub retains an `off` escape hatch for full-list compatibility.
+
+This does **not** reopen the rejected meta-tools-only alternative. Meta-tools remain discovery and selection aids; they are not the sole permanent capability surface. Bridge publication remains the complete v1 `GET /tools` catalog, so V2a requires no plugin code changes.
+
+Normative Hub-exposure details: `docs/protocol/v2.md`.
 
 ## Alternatives Considered
 

@@ -3,13 +3,13 @@
 **Status:** Accepted (product + architecture requirements)  
 **Date:** 2026-07-23（2026-07-27 grill 补充修订）  
 **Source:** grill-me 决策会话 + 现有 AT Terminal / JumpServer 代码现状  
-**Normative protocol:** [protocol/v1.md](./protocol/v1.md)  
+**Normative protocols:** [protocol/v1.md](./protocol/v1.md) (Bridge wire) and [protocol/v2.md](./protocol/v2.md) (Hub progressive exposure)
 **Integration guide:** [guides/plugin-integration.md](./guides/plugin-integration.md)  
 **ADR:** [decisions/ADR-001-at-series-mcp-hub.md](./decisions/ADR-001-at-series-mcp-hub.md)  
 **Agent guide:** [../AGENTS.md](../AGENTS.md)
 
 本文档记录**已拍板的需求与边界**，供实现与验收时反复核对。  
-接口字段级细节以 `protocol/v1.md` 为准；本文偏「要什么 / 不要什么 / 为什么」。
+接口字段级细节以 `protocol/v1.md`（Bridge wire）和 `protocol/v2.md`（Hub exposure）为准；本文偏「要什么 / 不要什么 / 为什么」。
 
 ---
 
@@ -102,6 +102,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | D29 | Installer 目标 IDE | v1：**Cursor + Kiro + Continue**；其它 hostApp 先保证探测/env，写入按需扩展 |
 | D30 | exec/write 确认 | 迁 Hub 时，所有 `risk=write\|exec` 工具 **必须**有插件内确认（或等价授权） |
 | D31 | Agent 指导文档 | 仓库根目录 **`AGENTS.md`**：指导本仓实现，并含两插件迁移检查清单 |
+| D32 | Hub v2 工具发现 | **渐进混合**：discover → select → first-class tool；2026-07-31 Accepted。不是永久仅元工具表面 |
 
 ---
 
@@ -126,6 +127,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | H13 | 内置 `at_list_providers`（只读、可 autoApprove） | P0 |
 | H14 | 不持有业务凭据，不实现 SSH/JumpServer 业务 | P0 |
 | H15 | 支持 registry 目录 watch；无原生 watch 时轮询兜底 | P1 |
+| H16 | Hub v2 在大目录下支持 discover → select → first-class 工具暴露；可通过 `AT_SERIES_TOOL_DISCOVERY=off` 回退全量 list | P0 |
 
 ### 4.2 Bridge（各插件）
 
@@ -223,7 +225,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 2. 把凭据/确认 UI 搬进 Hub 进程  
 3. 默认跨 IDE 调用对方窗口里的终端  
 4. Hub 内写死各插件业务工具清单  
-5. 仅靠元工具（`call_provider_tool`）暴露能力  
+5. 仅靠元工具作为永久唯一能力表面（v2 元工具只用于发现与选择，选中工具仍须作为 first-class MCP tools）
 6. v1 全量重命名所有 AT Terminal 工具  
 7. token 定期轮转、请求签名、父进程绑定  
 8. 保留 `languageModelTools` 双轨  
@@ -278,7 +280,8 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 |------|------|
 | **本文件 `requirements.md`** | 需求真源：已拍板决策、范围、验收 |
 | `../AGENTS.md` | Agent 实现指导（本仓 + 插件迁移清单） |
-| `protocol/v1.md` | 接口/字段/行为规范（实现契约） |
+| `protocol/v1.md` | Bridge wire 接口/字段/行为规范（实现契约） |
+| `protocol/v2.md` | Hub 渐进工具暴露与元工具规范（实现契约） |
 | `guides/plugin-integration.md` | 新插件怎么接入（imports 以 `@at-series/mcp-hub` 为准） |
 | `decisions/ADR-001-*.md` | 为什么选这套架构 |
 | `../README.md` | 仓级概述 + 插件作者 quick start |
@@ -291,7 +294,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 - 改需求：先改本文件决策表与对应章节，再改 protocol（若影响接口）  
 - 只改接口细节且不改产品意图：改 protocol 即可，并在 PR 说明  
 - 实现过程中发现决策不可行：更新本文件并标注变更日期，禁止静默偏离  
-- **接口变更硬门禁：** 凡 registry / Bridge HTTP / Hub 行为 / MCP 配置约定 / publisher·installer 对外契约变更，必须在**同一变更集**更新 `protocol/v1.md`（及类型；必要时本文件与 integration guide）。禁止先改服务实现、文档滞后，以免插件按旧文档对接出错（详见 `AGENTS.md` §2.1）  
+- **接口变更硬门禁：** 凡 registry / Bridge HTTP / Hub 行为 / MCP 配置约定 / publisher·installer 对外契约变更，必须在**同一变更集**更新适用的 `protocol/v1.md` 和/或 `protocol/v2.md`（及类型；必要时本文件与 integration guide）。禁止先改服务实现、文档滞后，以免插件按旧文档对接出错（详见 `AGENTS.md` §2.1）
 
 ---
 
