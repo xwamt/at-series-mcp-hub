@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AT_SERIES_PROTOCOL_VERSION,
   AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   AT_SERIES_HUB_PROTOCOL_VERSION,
   HUB_BUILTIN_TOOL_NAMES,
@@ -9,9 +10,10 @@ import {
 } from '../src/index';
 
 describe('protocol exports', () => {
-  it('exposes hub protocol 2 and bridge protocol 1', () => {
-    expect(AT_SERIES_HUB_PROTOCOL_VERSION).toBe(2);
+  it('keeps the legacy protocol version alias on bridge v1', () => {
+    expect(AT_SERIES_PROTOCOL_VERSION).toBe(1);
     expect(AT_SERIES_BRIDGE_PROTOCOL_VERSION).toBe(1);
+    expect(AT_SERIES_HUB_PROTOCOL_VERSION).toBe(2);
     expect(MCP_SERVER_DISPLAY_NAME).toBe('AT Series');
   });
 

@@ -12,10 +12,11 @@ export const AT_SERIES_BRIDGE_PROTOCOL_VERSION = 1 as const;
 export const AT_SERIES_HUB_PROTOCOL_VERSION = 2 as const;
 
 /**
- * @deprecated Prefer AT_SERIES_HUB_PROTOCOL_VERSION or AT_SERIES_BRIDGE_PROTOCOL_VERSION.
- * Kept as Hub version for older imports; do NOT use for Bridge registry parse.
+ * @deprecated Prefer AT_SERIES_BRIDGE_PROTOCOL_VERSION for Bridge publish/parse,
+ * and AT_SERIES_HUB_PROTOCOL_VERSION for Hub stamps (list_providers / hub-version).
+ * Kept at Bridge v1 so existing plugins that still import this constant keep publishing protocolVersion: 1.
  */
-export const AT_SERIES_PROTOCOL_VERSION = AT_SERIES_HUB_PROTOCOL_VERSION;
+export const AT_SERIES_PROTOCOL_VERSION = AT_SERIES_BRIDGE_PROTOCOL_VERSION;
 
 export const AT_SERIES_ROOT_DIRNAME = '.at-series';
 export const AT_SERIES_MCP_DIRNAME = 'mcp';
