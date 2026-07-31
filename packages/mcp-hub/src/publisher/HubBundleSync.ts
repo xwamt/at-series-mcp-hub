@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import semver from 'semver';
 import {
-  AT_SERIES_PROTOCOL_VERSION,
+  AT_SERIES_HUB_PROTOCOL_VERSION,
   type HubVersionRecord
 } from '../protocol/index';
 import { hubJsPath, hubVersionPath, mcpDir } from '../protocol/paths';
@@ -51,7 +51,7 @@ export async function syncHubBundle(input: {
 
   const meta: HubVersionRecord = {
     version: input.version,
-    protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+    protocolVersion: AT_SERIES_HUB_PROTOCOL_VERSION,
     writtenByPluginId: input.pluginId,
     writtenByPluginVersion: input.pluginVersion,
     writtenAt: Date.now(),

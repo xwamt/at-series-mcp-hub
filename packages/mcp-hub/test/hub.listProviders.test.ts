@@ -88,7 +88,7 @@ describe('buildListProvidersResult', () => {
 
     expect(result.hostApp).toBe('cursor');
     expect(result.hubVersion).toBe('0.1.0');
-    expect(result.protocolVersion).toBe(1);
+    expect(result.protocolVersion).toBe(2);
     expect(result.ignoredUnscopedBridgeCount).toBe(0);
 
     expect(result.providers.map((p) => p.pluginId).sort()).toEqual([

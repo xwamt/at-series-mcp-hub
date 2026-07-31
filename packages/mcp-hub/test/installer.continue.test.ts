@@ -59,7 +59,13 @@ describe('ensureAtSeriesMcpConfig (continue)', () => {
       command: 'node',
       args: [hubJs.replace(/\\/g, '/')],
       env: { [AT_SERIES_HOST_APP_ENV]: 'continue' },
-      autoApprove: ['at_list_providers']
+      autoApprove: [
+        'at_list_providers',
+        'at_search_tools',
+        'at_get_tool',
+        'at_select_tools',
+        'at_clear_tool_selection'
+      ]
     });
 
     await expect(fs.access(path.join(dir, 'at-terminal.yaml'))).rejects.toThrow();

@@ -83,7 +83,14 @@ describe('ensureAtSeriesMcpConfig (cursor)', () => {
       command: 'node',
       args: [hubJs.replace(/\\/g, '/')],
       env: { [AT_SERIES_HOST_APP_ENV]: 'cursor' },
-      autoApprove: ['at_list_providers', 'list_ssh_servers']
+      autoApprove: [
+        'at_list_providers',
+        'at_search_tools',
+        'at_get_tool',
+        'at_select_tools',
+        'at_clear_tool_selection',
+        'list_ssh_servers'
+      ]
     });
 
     const second = await ensureAtSeriesMcpConfig({

@@ -1,5 +1,5 @@
 import {
-  AT_SERIES_PROTOCOL_VERSION,
+  AT_SERIES_HUB_PROTOCOL_VERSION,
   type BridgeRegistryRecord,
   type HostApp,
   type ListProvidersResult
@@ -103,7 +103,7 @@ export function buildListProvidersResult(input: {
   return {
     hostApp: input.hostApp,
     hubVersion: input.hubVersion,
-    protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+    protocolVersion: AT_SERIES_HUB_PROTOCOL_VERSION,
     providers,
     ignoredUnscopedBridgeCount: input.ignoredUnscopedBridgeCount ?? 0
   };

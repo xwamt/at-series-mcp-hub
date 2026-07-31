@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {
-  AT_SERIES_PROTOCOL_VERSION,
+  AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   AT_SERIES_TOKEN_HEADER,
   type BridgeErrorBody,
   type BridgeHealthResponse,
@@ -121,7 +121,7 @@ export async function startFakeBridge(
       }
       const body: BridgeHealthResponse = {
         ok: true,
-        protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+        protocolVersion: AT_SERIES_BRIDGE_PROTOCOL_VERSION,
         bridgeId,
         pluginId,
         pluginDisplayName,
@@ -138,7 +138,7 @@ export async function startFakeBridge(
 
     if (method === 'GET' && url.pathname === '/tools') {
       const body: BridgeToolsResponse = {
-        protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+        protocolVersion: AT_SERIES_BRIDGE_PROTOCOL_VERSION,
         tools
       };
       sendJson(res, 200, body);

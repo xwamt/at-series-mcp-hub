@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  AT_SERIES_PROTOCOL_VERSION,
+  AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   type BridgeRegistryRecord,
   type HostApp
 } from '../protocol/index';
@@ -34,7 +34,7 @@ export function parseBridgeRegistryRecord(
 
   const raw = value as Record<string, unknown>;
 
-  if (raw.protocolVersion !== AT_SERIES_PROTOCOL_VERSION) {
+  if (raw.protocolVersion !== AT_SERIES_BRIDGE_PROTOCOL_VERSION) {
     return null;
   }
   if (!isNonEmptyString(raw.bridgeId)) {

@@ -1,11 +1,21 @@
 ﻿/**
- * AT Series Hub Protocol v1 — typed contracts.
+ * AT Series Hub Protocol v2 + Bridge wire v1 — typed contracts.
  * Normative prose: docs/protocol/v1.md
  *
  * This package intentionally has no vscode dependency.
  */
 
-export const AT_SERIES_PROTOCOL_VERSION = 1 as const;
+/** Bridge registry / GET /tools wire version (plugins still publish this). */
+export const AT_SERIES_BRIDGE_PROTOCOL_VERSION = 1 as const;
+
+/** Hub MCP surface + list_providers / hub-version protocol stamp. */
+export const AT_SERIES_HUB_PROTOCOL_VERSION = 2 as const;
+
+/**
+ * @deprecated Prefer AT_SERIES_HUB_PROTOCOL_VERSION or AT_SERIES_BRIDGE_PROTOCOL_VERSION.
+ * Kept as Hub version for older imports; do NOT use for Bridge registry parse.
+ */
+export const AT_SERIES_PROTOCOL_VERSION = AT_SERIES_HUB_PROTOCOL_VERSION;
 
 export const AT_SERIES_ROOT_DIRNAME = '.at-series';
 export const AT_SERIES_MCP_DIRNAME = 'mcp';
@@ -30,7 +40,21 @@ export const BRIDGE_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 export const MCP_SERVER_DISPLAY_NAME = 'AT Series';
 
-export const HUB_BUILTIN_TOOL_NAMES = ['at_list_providers'] as const;
+export const HUB_BUILTIN_TOOL_NAMES = [
+  'at_list_providers',
+  'at_search_tools',
+  'at_get_tool',
+  'at_select_tools',
+  'at_clear_tool_selection'
+] as const;
+
+export const AT_SERIES_TOOL_DISCOVERY_ENV = 'AT_SERIES_TOOL_DISCOVERY';
+export const AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV =
+  'AT_SERIES_TOOL_DISCOVERY_THRESHOLD';
+
+export const DEFAULT_TOOL_DISCOVERY_THRESHOLD = 20;
+
+export type ToolDiscoveryMode = 'auto' | 'always' | 'off';
 
 export type HostApp =
   | 'vscode'
@@ -86,7 +110,7 @@ export const DEFAULT_BRIDGE_ENDPOINTS: BridgeEndpoints = {
 };
 
 export interface BridgeRegistryRecord {
-  protocolVersion: typeof AT_SERIES_PROTOCOL_VERSION | number;
+  protocolVersion: typeof AT_SERIES_BRIDGE_PROTOCOL_VERSION | number;
   bridgeId: string;
   pluginId: string;
   pluginDisplayName: string;
@@ -174,6 +198,21 @@ export interface ListProvidersResult {
   }>;
   ignoredUnscopedBridgeCount: number;
 }
+
+export type ToolSearchHit = {
+  name: string;
+  title: string;
+  description: string;
+  risk: ToolRisk;
+  pluginId: string;
+};
+
+export type SelectToolsResult = {
+  selected: string[];
+  unknownNames: string[];
+  unknownPluginIds: string[];
+  exposedBusinessToolCount: number;
+};
 
 export interface BridgePublisher {
   publish(record: BridgeRegistryRecord): Promise<void>;

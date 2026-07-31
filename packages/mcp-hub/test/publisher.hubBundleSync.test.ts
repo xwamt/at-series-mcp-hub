@@ -75,7 +75,7 @@ describe('syncHubBundle', () => {
       await fs.readFile(hubVersionPath(home), 'utf8')
     ) as HubVersionRecord;
     expect(meta.version).toBe('0.1.0');
-    expect(meta.protocolVersion).toBe(1);
+    expect(meta.protocolVersion).toBe(2);
     expect(meta.writtenByPluginId).toBe('at.terminal');
     expect(meta.writtenByPluginVersion).toBe('0.2.17');
     expect(meta.bundleSha256).toBe(sha256Hex(content));
