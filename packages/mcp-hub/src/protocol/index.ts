@@ -1,6 +1,6 @@
 ﻿/**
  * AT Series Hub Protocol v2 + Bridge wire v1 — typed contracts.
- * Normative prose: docs/protocol/v1.md
+ * Normative prose: docs/protocol/v1.md (Bridge wire), docs/protocol/v2.md (Hub progressive exposure).
  *
  * This package intentionally has no vscode dependency.
  */

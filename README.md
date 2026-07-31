@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | npm 包 | `@at-series/mcp-hub` `0.1.0`（`packages/mcp-hub`） |
-| 接口规范 | [`docs/protocol/v1.md`](docs/protocol/v1.md)（对接真源） |
+| 接口规范 | [`docs/protocol/v1.md`](docs/protocol/v1.md)（Bridge 对接真源）；[`docs/protocol/v2.md`](docs/protocol/v2.md)（Hub 渐进式工具暴露） |
 | 契约类型 | [`packages/mcp-hub/src/protocol`](packages/mcp-hub/src/protocol)（随包导出，与规范同步） |
 | 当前阶段 | **P0a 已完成**：Hub 运行时 + publisher + installer；插件迁移见 P0b/P0c |
 
@@ -17,13 +17,14 @@
 
 | 文档 | 说明 |
 |------|------|
-| [**docs/protocol/v1.md**](docs/protocol/v1.md) | **接口契约真源**：registry、Bridge HTTP、Hub 聚合/路由、MCP 配置、错误体、版本选举 |
+| [**docs/protocol/v1.md**](docs/protocol/v1.md) | **Bridge 接口契约真源**：registry、Bridge HTTP、Hub 聚合/路由、MCP 配置、错误体、版本选举 |
+| [**docs/protocol/v2.md**](docs/protocol/v2.md) | **Hub 渐进式工具暴露**：meta-tools 发现/选择、hybrid 首屏、`AT_SERIES_TOOL_DISCOVERY`（Bridge 线协议仍为 v1） |
 | [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) | 新插件接入步骤（Bridge → publish → syncHubBundle → installer） |
 | [docs/requirements.md](docs/requirements.md) | 产品范围、决策与验收标准 |
 | [docs/decisions/ADR-001-at-series-mcp-hub.md](docs/decisions/ADR-001-at-series-mcp-hub.md) | 为何采用共享 Hub 架构 |
 | [AGENTS.md](AGENTS.md) | 本仓 Agent / 迁移工程约定 |
 
-插件作者以实现 [`docs/protocol/v1.md`](docs/protocol/v1.md) 为准，不要靠读 Hub 源码猜接口。类型从 `@at-series/mcp-hub` 导入，须与规范同变更集保持一致。
+插件作者以实现 [`docs/protocol/v1.md`](docs/protocol/v1.md)（Bridge 线协议）为准；Hub 渐进式暴露行为见 [`docs/protocol/v2.md`](docs/protocol/v2.md)。不要靠读 Hub 源码猜接口。类型从 `@at-series/mcp-hub` 导入，须与规范同变更集保持一致。
 
 ## 架构
 
@@ -62,7 +63,7 @@ IDE MCP Client (Cursor / Kiro / Continue / …)
 
 ## 新插件怎么接入
 
-**契约真源：** [`docs/protocol/v1.md`](docs/protocol/v1.md)。  
+**契约真源：** [`docs/protocol/v1.md`](docs/protocol/v1.md)（Bridge）；[`docs/protocol/v2.md`](docs/protocol/v2.md)（Hub 渐进暴露）。  
 **操作指南：** [`docs/guides/plugin-integration.md`](docs/guides/plugin-integration.md)。  
 类型从包导入：`import … from '@at-series/mcp-hub'`。
 
@@ -162,7 +163,8 @@ at-series-mcp-hub/
   AGENTS.md
   README.md
   docs/
-    protocol/v1.md           # 接口规范（对接真源）
+    protocol/v1.md           # Bridge 接口规范（对接真源）
+    protocol/v2.md           # Hub 渐进式工具暴露
     guides/plugin-integration.md
     requirements.md
     decisions/ADR-001-*.md
@@ -175,7 +177,8 @@ at-series-mcp-hub/
 
 | 文件 | 用途 |
 |------|------|
-| [docs/protocol/v1.md](docs/protocol/v1.md) | 接口规范真源 |
+| [docs/protocol/v1.md](docs/protocol/v1.md) | Bridge 接口规范真源 |
+| [docs/protocol/v2.md](docs/protocol/v2.md) | Hub 渐进式工具暴露规范 |
 | [docs/guides/plugin-integration.md](docs/guides/plugin-integration.md) | 插件接入指南 |
 | [AGENTS.md](AGENTS.md) | Agent / 迁移约定与检查清单 |
 | [packages/mcp-hub/README.md](packages/mcp-hub/README.md) | 包导出面说明 |
