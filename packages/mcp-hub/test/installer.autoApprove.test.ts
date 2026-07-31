@@ -13,6 +13,14 @@ function tool(name: string, risk: ToolCatalogEntry['risk']): ToolCatalogEntry {
 }
 
 describe('defaultAutoApproveToolNames', () => {
+  it('includes every progressive-discovery builtin with empty registry', () => {
+    const names = defaultAutoApproveToolNames({ registryTools: [] });
+
+    for (const builtin of HUB_BUILTIN_TOOL_NAMES) {
+      expect(names).toContain(builtin);
+    }
+  });
+
   it('includes builtins and only risk=read tools', () => {
     const names = defaultAutoApproveToolNames({
       registryTools: [
