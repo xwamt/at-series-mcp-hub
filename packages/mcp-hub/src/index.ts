@@ -63,7 +63,16 @@ export {
   cursorMcpConfigPath,
   kiroMcpConfigPath,
   continueMcpConfigPath,
+  buildAtSeriesMcpServerConfig,
+  buildInstallerAtSeriesEnv,
+  isSameAtSeriesMcpServerConfig,
+  INSTALLER_TOOL_DISCOVERY_DEFAULT,
+  INSTALLER_TOOL_DISCOVERY_THRESHOLD_DEFAULT,
+  INSTALLER_TOOL_SELECTION_IDLE_MS_DEFAULT,
+  INSTALLER_TOOL_SELECTION_MAX_CALLS_DEFAULT,
   type McpInstallerTarget,
   type EnsureAtSeriesMcpConfigInput,
-  type UninstallAtSeriesMcpConfigInput
+  type UninstallAtSeriesMcpConfigInput,
+  type AtSeriesMcpServerConfig,
+  type AtSeriesMcpServerEnv
 } from './installer/index';

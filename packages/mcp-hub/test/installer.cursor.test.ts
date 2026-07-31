@@ -4,10 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ensureAtSeriesMcpConfig,
-  uninstallAtSeriesMcpConfig
+  uninstallAtSeriesMcpConfig,
+  buildInstallerAtSeriesEnv
 } from '../src/installer/index';
-import { MCP_SERVER_DISPLAY_NAME, AT_SERIES_HOST_APP_ENV } from '../src/protocol/index';
-import type { ToolCatalogEntry } from '../src/protocol/index';
+import {
+  MCP_SERVER_DISPLAY_NAME,
+  AT_SERIES_HOST_APP_ENV,
+  HUB_BUILTIN_TOOL_NAMES,
+  type ToolCatalogEntry
+} from '../src/protocol/index';
 
 const readTools: ToolCatalogEntry[] = [
   {
@@ -26,6 +31,8 @@ const readTools: ToolCatalogEntry[] = [
   }
 ];
 
+const expectedAutoApprove = [...HUB_BUILTIN_TOOL_NAMES];
+
 describe('ensureAtSeriesMcpConfig (cursor)', () => {
   let home: string;
   let hubJs: string;
@@ -41,7 +48,7 @@ describe('ensureAtSeriesMcpConfig (cursor)', () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it('writes AT Series with env + hub path and migrates old entries', async () => {
+  it('writes AT Series with progressive env + meta-only autoApprove and migrates old entries', async () => {
     const mcpPath = path.join(home, '.cursor', 'mcp.json');
     await fs.mkdir(path.dirname(mcpPath), { recursive: true });
     await fs.writeFile(
@@ -82,16 +89,13 @@ describe('ensureAtSeriesMcpConfig (cursor)', () => {
     expect(parsed.mcpServers[MCP_SERVER_DISPLAY_NAME]).toEqual({
       command: 'node',
       args: [hubJs.replace(/\\/g, '/')],
-      env: { [AT_SERIES_HOST_APP_ENV]: 'cursor' },
-      autoApprove: [
-        'at_list_providers',
-        'at_search_tools',
-        'at_get_tool',
-        'at_select_tools',
-        'at_clear_tool_selection',
-        'list_ssh_servers'
-      ]
+      env: buildInstallerAtSeriesEnv('cursor'),
+      autoApprove: expectedAutoApprove
     });
+    expect(
+      (parsed.mcpServers[MCP_SERVER_DISPLAY_NAME] as { autoApprove: string[] })
+        .autoApprove
+    ).not.toContain('list_ssh_servers');
 
     const second = await ensureAtSeriesMcpConfig({
       target: 'cursor',
@@ -101,6 +105,51 @@ describe('ensureAtSeriesMcpConfig (cursor)', () => {
       registryTools: readTools
     });
     expect(second).toEqual({ updated: false });
+  });
+
+  it('upgrades stale JumpServer-style entry to canonical shape', async () => {
+    const mcpPath = path.join(home, '.cursor', 'mcp.json');
+    await fs.mkdir(path.dirname(mcpPath), { recursive: true });
+    await fs.writeFile(
+      mcpPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            [MCP_SERVER_DISPLAY_NAME]: {
+              command: 'node',
+              args: [hubJs.replace(/\\/g, '/')],
+              env: { [AT_SERIES_HOST_APP_ENV]: 'cursor' },
+              autoApprove: [
+                'at_list_providers',
+                'jumpserver_list_assets',
+                'jumpserver_get_terminal_context'
+              ]
+            }
+          }
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    const result = await ensureAtSeriesMcpConfig({
+      target: 'cursor',
+      hostApp: 'cursor',
+      hubJsAbsolutePath: hubJs,
+      home
+    });
+    expect(result).toEqual({ updated: true });
+
+    const parsed = JSON.parse(await fs.readFile(mcpPath, 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(parsed.mcpServers[MCP_SERVER_DISPLAY_NAME]).toEqual({
+      command: 'node',
+      args: [hubJs.replace(/\\/g, '/')],
+      env: buildInstallerAtSeriesEnv('cursor'),
+      autoApprove: expectedAutoApprove
+    });
   });
 
   it('uninstall removes AT Series only', async () => {
@@ -167,8 +216,8 @@ describe('ensureAtSeriesMcpConfig (kiro)', () => {
     const parsed = JSON.parse(await fs.readFile(mcpPath, 'utf8')) as {
       mcpServers: Record<string, { env?: Record<string, string> }>;
     };
-    expect(parsed.mcpServers[MCP_SERVER_DISPLAY_NAME]?.env?.[AT_SERIES_HOST_APP_ENV]).toBe(
-      'kiro'
+    expect(parsed.mcpServers[MCP_SERVER_DISPLAY_NAME]?.env).toEqual(
+      buildInstallerAtSeriesEnv('kiro')
     );
   });
 });

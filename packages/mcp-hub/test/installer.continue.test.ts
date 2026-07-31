@@ -5,9 +5,10 @@ import path from 'node:path';
 import { load as yamlLoad } from 'js-yaml';
 import {
   ensureAtSeriesMcpConfig,
-  uninstallAtSeriesMcpConfig
+  uninstallAtSeriesMcpConfig,
+  buildInstallerAtSeriesEnv
 } from '../src/installer/index';
-import { MCP_SERVER_DISPLAY_NAME, AT_SERIES_HOST_APP_ENV } from '../src/protocol/index';
+import { MCP_SERVER_DISPLAY_NAME, HUB_BUILTIN_TOOL_NAMES } from '../src/protocol/index';
 
 describe('ensureAtSeriesMcpConfig (continue)', () => {
   let workspace: string;
@@ -58,14 +59,8 @@ describe('ensureAtSeriesMcpConfig (continue)', () => {
       name: MCP_SERVER_DISPLAY_NAME,
       command: 'node',
       args: [hubJs.replace(/\\/g, '/')],
-      env: { [AT_SERIES_HOST_APP_ENV]: 'continue' },
-      autoApprove: [
-        'at_list_providers',
-        'at_search_tools',
-        'at_get_tool',
-        'at_select_tools',
-        'at_clear_tool_selection'
-      ]
+      env: buildInstallerAtSeriesEnv('continue'),
+      autoApprove: [...HUB_BUILTIN_TOOL_NAMES]
     });
 
     await expect(fs.access(path.join(dir, 'at-terminal.yaml'))).rejects.toThrow();

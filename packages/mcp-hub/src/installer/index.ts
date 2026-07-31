@@ -32,6 +32,7 @@ export type EnsureAtSeriesMcpConfigInput = {
   home?: string;
   /** Required when target is `continue`. */
   workspaceFolder?: string;
+  /** @deprecated Ignored — installer writes Hub meta autoApprove only. */
   registryTools?: ToolCatalogEntry[];
 };
 
@@ -130,3 +131,15 @@ export {
   ensureContinueMcpConfig,
   uninstallContinueMcpConfig
 };
+
+export {
+  buildAtSeriesMcpServerConfig,
+  buildInstallerAtSeriesEnv,
+  isSameAtSeriesMcpServerConfig,
+  INSTALLER_TOOL_DISCOVERY_DEFAULT,
+  INSTALLER_TOOL_DISCOVERY_THRESHOLD_DEFAULT,
+  INSTALLER_TOOL_SELECTION_IDLE_MS_DEFAULT,
+  INSTALLER_TOOL_SELECTION_MAX_CALLS_DEFAULT,
+  type AtSeriesMcpServerConfig,
+  type AtSeriesMcpServerEnv
+} from './serverConfig';

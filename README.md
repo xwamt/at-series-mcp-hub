@@ -76,7 +76,7 @@ Agent 用法见 **SuperOps** skill：[`skills/super-ops`](skills/super-ops/SKILL
 | **registry** | 读/校验 `bridges/<hostApp>/*.json`；watch |
 | **publisher** | publish / heartbeat / unpublish；`syncHubBundle` 选举写 `hub.js` |
 | **hub runtime** | stdio MCP：聚合、渐进暴露、meta-tools、路由 invoke、`list_changed` |
-| **installer** | 写/修/卸 **`AT Series`**；迁移旧 AT 条目；autoApprove = 全部 Hub meta + `risk=read` |
+| **installer** | 写/修/卸 **`AT Series`**；迁移旧 AT 条目；autoApprove = Hub meta only；写入 progressive discovery env |
 
 覆盖 IDE：Cursor、Kiro、Continue。
 
@@ -135,8 +135,7 @@ await syncHubBundle({
 await ensureAtSeriesMcpConfig({
   target: 'cursor',
   hostApp,
-  hubJsAbsolutePath: hubJsPath(),
-  registryTools: tools
+  hubJsAbsolutePath: hubJsPath()
 });
 
 const publisher = new FsBridgePublisher({ bridgeId, hostApp });
@@ -158,7 +157,7 @@ await publisher.publish(record);
 
 **Hub 版本选举：** semver 更高 → 覆盖；同版本且 `bundleSha256` 不同 → 覆盖；同 hash → no-op；更低 → 禁止覆盖。
 
-**autoApprove：** Hub 全部 meta-tools（`at_list_providers`、`at_search_tools`、`at_get_tool`、`at_select_tools`、`at_clear_tool_selection`）+ `risk=read` 业务工具；`write`/`exec` 须插件内确认。
+**autoApprove（installer）：** 仅 Hub meta-tools（`at_list_providers`、`at_search_tools`、`at_get_tool`、`at_select_tools`、`at_clear_tool_selection`）。业务工具经 bridge 注册 + `at_select_tools` 暴露；`write`/`exec` 须插件内确认。Installer 同时写入 `AT_SERIES_TOOL_DISCOVERY=auto`、`THRESHOLD=20`、`SELECTION_IDLE_MS=0`、`SELECTION_MAX_CALLS=0`。
 
 **不要：** per-plugin `mcp-server.js` 作产品入口；不要用 `languageModelTools` 暴露同一批工具。
 

@@ -281,6 +281,7 @@ describe('P0a e2e functional', () => {
     );
 
     const hubAbs = hubJsPath(home).replace(/\\/g, '/');
+    // Helper may still list read tools; installer itself writes meta-only.
     const auto = defaultAutoApproveToolNames({
       registryTools: [ping, run, jsList]
     });
@@ -302,6 +303,19 @@ describe('P0a e2e functional', () => {
     );
     expect(cursorCfg.mcpServers[MCP_SERVER_DISPLAY_NAME].env[AT_SERIES_HOST_APP_ENV]).toBe(
       'cursor'
+    );
+    expect(
+      cursorCfg.mcpServers[MCP_SERVER_DISPLAY_NAME].env.AT_SERIES_TOOL_SELECTION_IDLE_MS
+    ).toBe('0');
+    expect(cursorCfg.mcpServers[MCP_SERVER_DISPLAY_NAME].autoApprove).toEqual([
+      'at_list_providers',
+      'at_search_tools',
+      'at_get_tool',
+      'at_select_tools',
+      'at_clear_tool_selection'
+    ]);
+    expect(cursorCfg.mcpServers[MCP_SERVER_DISPLAY_NAME].autoApprove).not.toContain(
+      'example_ping'
     );
     expect(cursorCfg.mcpServers['AT Terminal']).toBeUndefined();
     expect(cursorCfg.mcpServers['other-server']).toBeDefined();

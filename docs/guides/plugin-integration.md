@@ -99,7 +99,7 @@ const tools = [
 
 Risk mapping:
 
-- `read` -> installer may autoApprove
+- `read` -> may be manually allowlisted by users; installer does **not** autoApprove business tools
 - `write` / `exec` -> never default autoApprove; enforce UI confirmation in plugin
 
 ### 3. Implement Bridge endpoints
@@ -198,21 +198,17 @@ Rules: higher semver wins; same semver + different hash overwrites (hotfix); low
 
 ### 6. Install MCP config once
 
-Prefer the helper (migrates legacy AT entries; does not delete third-party servers):
+Prefer the helper (migrates legacy AT entries; does not delete third-party servers).
+Every AT plugin may call `ensure` on activate — desired shape is identical, so repeats are no-ops.
 
 ```ts
 await ensureAtSeriesMcpConfig({
   target: 'cursor', // 'kiro' | 'continue'
   hostApp: 'cursor',
-  hubJsAbsolutePath: hubJsPath(),
-  registryTools: tools as ToolCatalogEntry[]
+  hubJsAbsolutePath: hubJsPath()
   // continue only: workspaceFolder: '<workspace absolute path>'
 });
-
-const autoApprove = defaultAutoApproveToolNames({
-  registryTools: tools as ToolCatalogEntry[]
-});
-// -> risk=read names + at_list_providers
+// Do not pass registryTools for autoApprove — installer writes Hub meta only.
 ```
 
 Resulting Cursor/Kiro shape:
@@ -224,9 +220,19 @@ Resulting Cursor/Kiro shape:
       "command": "node",
       "args": ["C:/Users/<you>/.at-series/mcp/hub.js"],
       "env": {
-        "AT_SERIES_HOST_APP": "cursor"
+        "AT_SERIES_HOST_APP": "cursor",
+        "AT_SERIES_TOOL_DISCOVERY": "auto",
+        "AT_SERIES_TOOL_DISCOVERY_THRESHOLD": "20",
+        "AT_SERIES_TOOL_SELECTION_IDLE_MS": "0",
+        "AT_SERIES_TOOL_SELECTION_MAX_CALLS": "0"
       },
-      "autoApprove": ["at_list_providers", "example_ping"]
+      "autoApprove": [
+        "at_list_providers",
+        "at_search_tools",
+        "at_get_tool",
+        "at_select_tools",
+        "at_clear_tool_selection"
+      ]
     }
   }
 }
@@ -279,7 +285,7 @@ Depend on **`@at-series/mcp-hub`** for:
 
 - protocol types
 - registry publisher + hub bundle sync
-- MCP config installer helper (`AT Series` + migration + read-only autoApprove)
+- MCP config installer helper (`AT Series` + migration + Hub-meta autoApprove + progressive env)
 
 You **implement your own** Bridge HTTP server (`GET /health`, `GET /tools`, `POST /invoke`). The Hub package does **not** ship a shared Bridge HTTP framework.
 

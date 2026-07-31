@@ -6,8 +6,11 @@ import {
 } from '../protocol/index';
 
 /**
- * Default MCP autoApprove list: builtins (e.g. at_list_providers) plus
+ * Optional helper for building an autoApprove list: Hub builtins plus
  * registry tools whose normalized risk is `read`.
+ *
+ * IDE installers do **not** use this for business tools — they write
+ * Hub meta-tools only via `buildAtSeriesMcpServerConfig`.
  * Missing/invalid risk fails closed via normalizeToolRisk → exec.
  */
 export function defaultAutoApproveToolNames(input: {
