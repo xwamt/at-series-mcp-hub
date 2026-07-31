@@ -60,6 +60,8 @@ describe('createHubRuntime progressive tool exposure', () => {
   async function start(options: {
     discoveryMode?: 'auto' | 'always' | 'off';
     discoveryThreshold?: number;
+    selectionIdleMs?: number;
+    selectionMaxCalls?: number;
     onToolsListChanged?: () => void;
   } = {}): Promise<HubRuntime> {
     runtime = await createHubRuntime({
@@ -258,5 +260,47 @@ describe('createHubRuntime progressive tool exposure', () => {
       expect(result.isError).toBe(true);
       expect(JSON.parse(result.content[0]!.text).error.code).toBe('VALIDATION_ERROR');
     }
+  });
+
+  it('auto-clears selection after idle TTL', async () => {
+    await publishBridge([tool('list_ssh_servers')]);
+    let notifications = 0;
+    const hub = await start({
+      discoveryMode: 'always',
+      selectionIdleMs: 20,
+      selectionMaxCalls: 0,
+      onToolsListChanged: () => {
+        notifications++;
+      }
+    });
+
+    await hub.callTool('at_select_tools', { pluginIds: ['at.terminal'] });
+    expect(
+      (await hub.listToolsForMcp()).map((entry) => entry.name)
+    ).toContain('list_ssh_servers');
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const afterIdle = (await hub.listToolsForMcp()).map((entry) => entry.name).sort();
+    expect(afterIdle).toEqual([...HUB_BUILTIN_TOOL_NAMES].sort());
+    expect(notifications).toBeGreaterThanOrEqual(2);
+  });
+
+  it('auto-clears selection after max business calls', async () => {
+    await publishBridge([tool('list_ssh_servers')]);
+    let notifications = 0;
+    const hub = await start({
+      discoveryMode: 'always',
+      selectionIdleMs: 0,
+      selectionMaxCalls: 1,
+      onToolsListChanged: () => {
+        notifications++;
+      }
+    });
+
+    await hub.callTool('at_select_tools', { pluginIds: ['at.terminal'] });
+    await hub.callTool('list_ssh_servers', {});
+    const after = (await hub.listToolsForMcp()).map((entry) => entry.name).sort();
+    expect(after).toEqual([...HUB_BUILTIN_TOOL_NAMES].sort());
+    expect(notifications).toBeGreaterThanOrEqual(2);
   });
 });

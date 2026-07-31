@@ -6,8 +6,11 @@ import {
   META_TOOL_NAMES,
   parseToolDiscoveryMode,
   parseToolDiscoveryThreshold,
+  parseToolSelectionIdleMs,
+  parseToolSelectionMaxCalls,
   resolveSelectTools,
   searchTools,
+  shouldAutoClearSelection,
   type CatalogToolRef
 } from '../src/hub/discovery';
 
@@ -273,5 +276,50 @@ describe('META_TOOL_NAMES', () => {
   it('contains exactly the Hub builtins', () => {
     expect(META_TOOL_NAMES.has('at_search_tools')).toBe(true);
     expect(META_TOOL_NAMES.has('list_ssh_servers')).toBe(false);
+  });
+});
+
+describe('selection auto-clear helpers', () => {
+  it('parses idle ms and max calls with 0 meaning disabled', () => {
+    expect(parseToolSelectionIdleMs(undefined)).toBe(30_000);
+    expect(parseToolSelectionIdleMs('0')).toBe(0);
+    expect(parseToolSelectionIdleMs('1500')).toBe(1500);
+    expect(parseToolSelectionIdleMs('nope')).toBe(30_000);
+    expect(parseToolSelectionMaxCalls(undefined)).toBe(0);
+    expect(parseToolSelectionMaxCalls('5')).toBe(5);
+    expect(parseToolSelectionMaxCalls('-1')).toBe(0);
+  });
+
+  it('reports idle and max_calls reasons', () => {
+    expect(
+      shouldAutoClearSelection({
+        selectedCount: 2,
+        idleMs: 1000,
+        maxCalls: 0,
+        businessCallsSinceSelect: 0,
+        lastActivityAt: 0,
+        now: 1000
+      })
+    ).toBe('idle');
+    expect(
+      shouldAutoClearSelection({
+        selectedCount: 2,
+        idleMs: 0,
+        maxCalls: 2,
+        businessCallsSinceSelect: 2,
+        lastActivityAt: 50,
+        now: 100
+      })
+    ).toBe('max_calls');
+    expect(
+      shouldAutoClearSelection({
+        selectedCount: 0,
+        idleMs: 1,
+        maxCalls: 1,
+        businessCallsSinceSelect: 9,
+        lastActivityAt: 0,
+        now: 100
+      })
+    ).toBeNull();
   });
 });

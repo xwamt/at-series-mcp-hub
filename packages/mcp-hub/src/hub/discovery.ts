@@ -1,5 +1,7 @@
 import {
   DEFAULT_TOOL_DISCOVERY_THRESHOLD,
+  DEFAULT_TOOL_SELECTION_IDLE_MS,
+  DEFAULT_TOOL_SELECTION_MAX_CALLS,
   HUB_BUILTIN_TOOL_NAMES,
   type SelectToolsResult,
   type ToolCatalogEntry,
@@ -39,6 +41,71 @@ export function parseToolDiscoveryThreshold(raw: unknown): number {
   return Number.isInteger(threshold) && threshold >= 0
     ? threshold
     : DEFAULT_TOOL_DISCOVERY_THRESHOLD;
+}
+
+/** Parse idle TTL ms. Empty/invalid → default; explicit `0` disables. */
+export function parseToolSelectionIdleMs(raw: unknown): number {
+  if (raw === undefined || raw === null) {
+    return DEFAULT_TOOL_SELECTION_IDLE_MS;
+  }
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw >= 0
+      ? raw
+      : DEFAULT_TOOL_SELECTION_IDLE_MS;
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return DEFAULT_TOOL_SELECTION_IDLE_MS;
+  }
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0
+    ? value
+    : DEFAULT_TOOL_SELECTION_IDLE_MS;
+}
+
+/** Parse max business calls. Empty/invalid → default; explicit `0` disables. */
+export function parseToolSelectionMaxCalls(raw: unknown): number {
+  if (raw === undefined || raw === null) {
+    return DEFAULT_TOOL_SELECTION_MAX_CALLS;
+  }
+  if (typeof raw === 'number') {
+    return Number.isInteger(raw) && raw >= 0
+      ? raw
+      : DEFAULT_TOOL_SELECTION_MAX_CALLS;
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return DEFAULT_TOOL_SELECTION_MAX_CALLS;
+  }
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0
+    ? value
+    : DEFAULT_TOOL_SELECTION_MAX_CALLS;
+}
+
+export function shouldAutoClearSelection(input: {
+  selectedCount: number;
+  idleMs: number;
+  maxCalls: number;
+  businessCallsSinceSelect: number;
+  lastActivityAt: number | undefined;
+  now: number;
+}): 'idle' | 'max_calls' | null {
+  if (input.selectedCount === 0) {
+    return null;
+  }
+  if (
+    input.maxCalls > 0 &&
+    input.businessCallsSinceSelect >= input.maxCalls
+  ) {
+    return 'max_calls';
+  }
+  if (
+    input.idleMs > 0 &&
+    input.lastActivityAt !== undefined &&
+    input.now - input.lastActivityAt >= input.idleMs
+  ) {
+    return 'idle';
+  }
+  return null;
 }
 
 export function searchTools(

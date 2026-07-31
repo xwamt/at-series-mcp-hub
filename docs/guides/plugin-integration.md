@@ -29,8 +29,11 @@ Hub v2 may progressively expose a large tool catalog. The agent flow is:
 1. Call `at_list_providers`, then `at_search_tools` (and `at_get_tool` when full schema detail is needed).
 2. Call `at_select_tools` with provider IDs and/or tool names.
 3. Refresh `tools/list` after `notifications/tools/list_changed`, then call selected tools as first-class MCP tools.
+4. Prefer `at_clear_tool_selection` (or `replace`) at task boundaries. The Hub also auto-clears selection after idle TTL (`AT_SERIES_TOOL_SELECTION_IDLE_MS`, default 30s) or optional call budget (`AT_SERIES_TOOL_SELECTION_MAX_CALLS`).
 
 Plugins do not implement this flow and MUST NOT pre-filter their catalogs: continue publishing the complete invocable catalog from `GET /tools` and in the registry `tools` snapshot with `protocolVersion: 1`. The Hub owns discovery mode and selection. See [Protocol v2](../protocol/v2.md).
+
+Agent guidance for the same flow lives in the series skill [`skills/super-ops`](../../skills/super-ops/SKILL.md) (SuperOps; plugin-specific and ops appendices under `references/`). Per-plugin skills should point agents at AT Series + discover→select→call rather than a legacy per-plugin MCP entry.
 
 ## Depend on the shared package
 

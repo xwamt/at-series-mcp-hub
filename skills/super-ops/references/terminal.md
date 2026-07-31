@@ -1,0 +1,38 @@
+# AT Terminal (`at.terminal`)
+
+Select first:
+
+```json
+{ "mode": "replace", "pluginIds": ["at.terminal"] }
+```
+
+Or a minimal set, e.g. `{ "mode": "replace", "names": ["get_terminal_context", "list_ssh_servers", "run_remote_command"] }`.
+
+## Tool map
+
+| Need | Tool | Risk |
+| --- | --- | --- |
+| Resolve terminals / focus | `get_terminal_context` | read |
+| List background-authorized servers | `list_ssh_servers` | read |
+| Non-interactive remote command | `run_remote_command` | exec |
+| List / stat / read remote files | `sftp_list_directory`, `sftp_stat_path`, `sftp_read_file` | read |
+| Create / write remote files or dirs | `sftp_create_file`, `sftp_create_directory`, `sftp_write_file` | write |
+
+## Workflow
+
+1. Call `get_terminal_context` unless the user already gave a clear `serverId` / `terminalId`. If multiple targets remain possible, ask; never guess.
+2. Prefer read-only evidence. A diagnose request does not authorize a fix.
+3. `run_remote_command`: bounded, non-interactive only. Start with a POSIX comment in the conversation language:
+
+```sh
+# Purpose: inspect recent failures for example.service
+journalctl -u example.service -n 100 --no-pager
+```
+
+4. SFTP: `stat` / `read` before write; keep POSIX paths.
+5. `list_ssh_servers` only returns servers with **Allow background connections**. `run_remote_command` may use a connected UI terminal, or background-authorized servers when no UI session is open.
+6. Report target, evidence, actions, exit status, verification, remaining risk. Never claim an unverified result.
+
+## Ops references (mandatory when applicable)
+
+Before any write/exec or other remote state change, load [safe-operations.md](safe-operations.md). For host/runtime/incident work, load the matching files from the series skill router (linux, systemd, docker, incident-response, …).

@@ -13,7 +13,9 @@ import type {
 } from '../protocol/index';
 import {
   AT_SERIES_TOOL_DISCOVERY_ENV,
-  AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV
+  AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV,
+  AT_SERIES_TOOL_SELECTION_IDLE_MS_ENV,
+  AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV
 } from '../protocol/index';
 import { listBridgeRecords } from '../registry/read';
 import {
@@ -36,14 +38,17 @@ import {
   META_TOOL_NAMES,
   parseToolDiscoveryMode,
   parseToolDiscoveryThreshold,
+  parseToolSelectionIdleMs,
+  parseToolSelectionMaxCalls,
   resolveSelectTools,
   searchTools,
+  shouldAutoClearSelection,
   type CatalogToolRef,
   type SelectToolsArgs
 } from './discovery';
 
 const META_TOOL_DESCRIPTION =
-  'Use search → select → list_changed → first-class call to discover tools. Selection filters tools/list only; it is not an ACL.';
+  'Use search → select → list_changed → first-class call to discover tools. Selection filters tools/list only; it is not an ACL. Selection auto-clears after idle TTL or call budget (see protocol v2).';
 
 const HUB_META_TOOLS: ToolCatalogEntry[] = [
   {
@@ -162,6 +167,10 @@ export async function createHubRuntime(options: {
   hubVersion: string;
   discoveryMode?: ToolDiscoveryMode;
   discoveryThreshold?: number;
+  /** Override AT_SERIES_TOOL_SELECTION_IDLE_MS (tests). `0` disables. */
+  selectionIdleMs?: number;
+  /** Override AT_SERIES_TOOL_SELECTION_MAX_CALLS (tests). `0` disables. */
+  selectionMaxCalls?: number;
   /** Invoked when the aggregated tool-name set changes (after baseline). */
   onToolsListChanged?: () => void;
 }): Promise<HubRuntime> {
@@ -175,6 +184,13 @@ export async function createHubRuntime(options: {
         process.env[AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV] ??
         ''
     )
+  );
+  const selectionIdleMs = parseToolSelectionIdleMs(
+    options.selectionIdleMs ?? process.env[AT_SERIES_TOOL_SELECTION_IDLE_MS_ENV]
+  );
+  const selectionMaxCalls = parseToolSelectionMaxCalls(
+    options.selectionMaxCalls ??
+      process.env[AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV]
   );
   let healthyBridges: HealthyBridge[] = [];
   let unhealthyBridges: UnhealthyBridgeInput[] = [];
@@ -193,6 +209,8 @@ export async function createHubRuntime(options: {
   /** `undefined` until the first successful refresh establishes a baseline. */
   let toolsFingerprint: string | undefined;
   let selectedToolNames = new Set<string>();
+  let lastSelectionActivityAt: number | undefined;
+  let businessCallsSinceSelect = 0;
   let closed = false;
   let registryWatch: WatchBridgeRegistryHandle | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
@@ -238,6 +256,36 @@ export async function createHubRuntime(options: {
     } catch {
       // Notification failures must not break catalog updates.
     }
+  }
+
+  function touchSelectionActivity(): void {
+    lastSelectionActivityAt = Date.now();
+  }
+
+  function clearSelection(reason: 'manual' | 'idle' | 'max_calls' | 'reconcile'): void {
+    if (selectedToolNames.size === 0) {
+      return;
+    }
+    selectedToolNames.clear();
+    businessCallsSinceSelect = 0;
+    lastSelectionActivityAt = undefined;
+    notifyExposedToolsChanged();
+    void reason;
+  }
+
+  function maybeAutoClearSelection(now = Date.now()): 'idle' | 'max_calls' | null {
+    const reason = shouldAutoClearSelection({
+      selectedCount: selectedToolNames.size,
+      idleMs: selectionIdleMs,
+      maxCalls: selectionMaxCalls,
+      businessCallsSinceSelect,
+      lastActivityAt: lastSelectionActivityAt,
+      now
+    });
+    if (reason) {
+      clearSelection(reason);
+    }
+    return reason;
   }
 
   async function refreshCatalogOnce(): Promise<
@@ -288,6 +336,11 @@ export async function createHubRuntime(options: {
     selectedToolNames = new Set(
       [...selectedToolNames].filter((name) => winnerNames.has(name))
     );
+    if (selectedToolNames.size === 0) {
+      businessCallsSinceSelect = 0;
+      lastSelectionActivityAt = undefined;
+    }
+    maybeAutoClearSelection();
     notifyExposedToolsChanged();
 
     return { ...catalog, providers: providersResult };
@@ -316,6 +369,7 @@ export async function createHubRuntime(options: {
 
   async function listToolsForMcp(): Promise<ToolCatalogEntry[]> {
     await refreshCatalog();
+    maybeAutoClearSelection();
     return [...exposedBusinessTools(), ...HUB_META_TOOLS];
   }
 
@@ -327,8 +381,10 @@ export async function createHubRuntime(options: {
     isError?: boolean;
   }> {
     await refreshCatalog();
+    maybeAutoClearSelection();
 
     if (name === 'at_list_providers') {
+      touchSelectionActivity();
       return {
         content: [
           {
@@ -340,6 +396,7 @@ export async function createHubRuntime(options: {
     }
 
     if (name === 'at_search_tools') {
+      touchSelectionActivity();
       const query = args.query;
       if (typeof query !== 'string' || query.trim() === '') {
         return errorText('VALIDATION_ERROR', 'query must be a non-empty string');
@@ -373,6 +430,7 @@ export async function createHubRuntime(options: {
     }
 
     if (name === 'at_get_tool') {
+      touchSelectionActivity();
       if (typeof args.name !== 'string' || args.name.trim() === '') {
         return errorText('VALIDATION_ERROR', 'name must be a non-empty string');
       }
@@ -441,6 +499,8 @@ export async function createHubRuntime(options: {
         allToolNames: new Set(refs.map(({ entry }) => entry.name))
       });
       selectedToolNames = new Set(result.selected);
+      businessCallsSinceSelect = 0;
+      touchSelectionActivity();
       const exposedBusinessToolCount = exposedBusinessTools().length;
       notifyExposedToolsChanged();
       return {
@@ -454,8 +514,7 @@ export async function createHubRuntime(options: {
     }
 
     if (name === 'at_clear_tool_selection') {
-      selectedToolNames.clear();
-      notifyExposedToolsChanged();
+      clearSelection('manual');
       return {
         content: [{ type: 'text', text: JSON.stringify({ selected: [] }) }]
       };
@@ -466,8 +525,12 @@ export async function createHubRuntime(options: {
       return errorText('NOT_FOUND', `Unknown tool: ${name}`);
     }
 
+    businessCallsSinceSelect += 1;
+    touchSelectionActivity();
+
     const ordered = orderBridgesForTool(name, winner.bridges);
     if (ordered.length === 0) {
+      maybeAutoClearSelection();
       return errorText('NOT_FOUND', `No healthy bridge for tool: ${name}`);
     }
 
@@ -483,12 +546,14 @@ export async function createHubRuntime(options: {
         });
 
         if ('error' in response) {
+          maybeAutoClearSelection();
           return {
             content: [{ type: 'text', text: JSON.stringify(response) }],
             isError: true
           };
         }
 
+        maybeAutoClearSelection();
         return {
           content: [
             {
@@ -501,6 +566,8 @@ export async function createHubRuntime(options: {
         lastTransportError = err;
       }
     }
+
+    maybeAutoClearSelection();
 
     if (lastTransportError instanceof BridgeHttpError) {
       return errorText(lastTransportError.code, lastTransportError.message);

@@ -53,7 +53,24 @@ export const AT_SERIES_TOOL_DISCOVERY_ENV = 'AT_SERIES_TOOL_DISCOVERY';
 export const AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV =
   'AT_SERIES_TOOL_DISCOVERY_THRESHOLD';
 
+/** Idle TTL for progressive selection auto-clear (milliseconds). `0` disables. */
+export const AT_SERIES_TOOL_SELECTION_IDLE_MS_ENV =
+  'AT_SERIES_TOOL_SELECTION_IDLE_MS';
+
+/**
+ * Max business-tool calls after select before auto-clear.
+ * `0` disables the call-budget path.
+ */
+export const AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV =
+  'AT_SERIES_TOOL_SELECTION_MAX_CALLS';
+
 export const DEFAULT_TOOL_DISCOVERY_THRESHOLD = 20;
+
+/** Default selection idle TTL: 30s approximates an agent-turn gap. */
+export const DEFAULT_TOOL_SELECTION_IDLE_MS = 30_000;
+
+/** Default call budget disabled (idle TTL is the primary auto-clear path). */
+export const DEFAULT_TOOL_SELECTION_MAX_CALLS = 0;
 
 export type ToolDiscoveryMode = 'auto' | 'always' | 'off';
 

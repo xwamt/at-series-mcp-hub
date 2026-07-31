@@ -2,6 +2,8 @@
 
 Shared AT Series MCP Hub runtime, registry publisher, hub bundle sync, and IDE MCP config installer helpers.
 
+**Current version:** `0.2.0` — Hub protocol surface **2** (progressive tool discovery); Bridge wire remains **1**.
+
 ## Install
 
 ```bash
@@ -12,12 +14,12 @@ npm install @at-series/mcp-hub
 
 | Export | Role |
 |--------|------|
-| Protocol types / constants / path helpers | Contracts in `src/protocol` (re-exported from package root) |
+| Protocol types / constants / path helpers | Bridge v1 + Hub v2 contracts in `src/protocol` |
 | `FsBridgePublisher` | Publish / heartbeat / unpublish registry records |
 | `syncHubBundle` | Elect `~/.at-series/mcp/hub.js` by semver + hash |
 | `ensureAtSeriesMcpConfig` / `uninstallAtSeriesMcpConfig` | Write/repair/remove the single `AT Series` MCP entry |
-| `defaultAutoApproveToolNames` | `risk=read` tools + `at_list_providers` |
-| `createHubRuntime` | stdio Hub (used by packaged `hub.js`) |
+| `defaultAutoApproveToolNames` | All Hub meta-tools + `risk=read` registry tools |
+| `createHubRuntime` | stdio Hub (packaged as `hub.js`) |
 
 Hub bundle entry for packaging:
 
@@ -26,19 +28,19 @@ require.resolve('@at-series/mcp-hub/hub')
 // -> dist/hub.js
 ```
 
-## Docs
+## Progressive discovery (Hub v2)
 
-Integrate against the published protocol — do not reverse-engineer Hub internals:
+When the catalog is large (or `AT_SERIES_TOOL_DISCOVERY=always`), cold `tools/list` exposes Hub meta-tools only. Agents `at_select_tools`, then call selected tools as first-class MCP tools after `list_changed`. See repo [`docs/protocol/v2.md`](../../docs/protocol/v2.md) and skill [`skills/super-ops`](../../skills/super-ops/SKILL.md).
+
+## Docs
 
 | Doc | Role |
 |-----|------|
-| [`docs/protocol/v1.md`](../../docs/protocol/v1.md) | **Normative interface contract** (registry, Bridge HTTP, Hub routing, MCP config) |
-| [`docs/guides/plugin-integration.md`](../../docs/guides/plugin-integration.md) | Step-by-step plugin integration |
-| [`docs/requirements.md`](../../docs/requirements.md) | Product scope and acceptance |
-| [`docs/decisions/ADR-001-at-series-mcp-hub.md`](../../docs/decisions/ADR-001-at-series-mcp-hub.md) | Architecture rationale |
-| [`AGENTS.md`](../../AGENTS.md) | Repo agent / migration conventions |
-| [`README.md`](../../README.md) | Repo overview and activate example |
+| [`docs/protocol/v1.md`](../../docs/protocol/v1.md) | Bridge wire contract |
+| [`docs/protocol/v2.md`](../../docs/protocol/v2.md) | Hub progressive exposure |
+| [`docs/guides/plugin-integration.md`](../../docs/guides/plugin-integration.md) | Plugin integration |
+| [`README.md`](../../README.md) | Repo overview |
 
 ## Note
 
-This package does **not** include a Bridge HTTP framework. Plugins implement `GET /health`, `GET /tools`, and `POST /invoke` themselves per [`docs/protocol/v1.md`](../../docs/protocol/v1.md).
+This package does **not** include a Bridge HTTP framework. Plugins implement `GET /health`, `GET /tools`, and `POST /invoke` themselves per protocol v1.

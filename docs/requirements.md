@@ -98,7 +98,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | D25 | 无 hostApp 老数据 | v1 **忽略** |
 | D26 | 包边界 v1 | **单一包**：协议 + 注册表 + Hub 运行时 + publisher helper + **MCP config installer helper**；**不含**业务与通用 Bridge HTTP 框架（插件各自实现 Bridge） |
 | D27 | 安全基线 | 127.0.0.1、高熵 token、权限收紧、不落 token 日志；v1 不做轮转/签名 |
-| D28 | Skill | 本仓维护 **单一系列 skill**（如 `at-series-mcp`）；旧插件 skill 删除或改指向本仓 |
+| D28 | Skill | 本仓维护 **单一系列 skill**（`super-ops` / SuperOps）；旧插件 skill 删除或改指向本仓 |
 | D29 | Installer 目标 IDE | v1：**Cursor + Kiro + Continue**；其它 hostApp 先保证探测/env，写入按需扩展 |
 | D30 | exec/write 确认 | 迁 Hub 时，所有 `risk=write\|exec` 工具 **必须**有插件内确认（或等价授权） |
 | D31 | Agent 指导文档 | 仓库根目录 **`AGENTS.md`**：指导本仓实现，并含两插件迁移检查清单 |
@@ -178,7 +178,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | U1 | 删除 `languageModelTools` 作为工具暴露面 | P0 |
 | U2 | 删除各插件独立 stdio MCP 作为产品主入口 | P0 |
 | U3 | 文档/Skill 以 AT Series 为唯一 MCP 入口说明 | P0 |
-| U4 | 本仓维护 **单一** 系列 skill（`at-series-mcp`）；含各插件工具附录 | P1 |
+| U4 | 本仓维护 **单一** 系列 skill（`super-ops` / SuperOps）；含各插件工具附录与运维规范 | P1 |
 
 ### 4.6 插件侧确认（迁入约束）
 

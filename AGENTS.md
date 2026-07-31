@@ -115,7 +115,7 @@ at-series-mcp-hub/
       installer/             # Cursor / Kiro / Continue
       index.ts
     test/
-  skills/at-series-mcp/      # 唯一系列 skill（P1）
+  skills/super-ops/          # 唯一系列 skill SuperOps（P1）
 ```
 
 约束：

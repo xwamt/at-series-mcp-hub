@@ -8,3 +8,6 @@ _boot.py
 
 # Local agent plans / working notes (not published)
 docs/superpowers/
+
+*.tgz
+
