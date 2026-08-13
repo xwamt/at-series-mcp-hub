@@ -1119,3 +1119,40 @@ AssertionError: expected { id: 'node-default', …(9) } to match object { id: 'a
 **顺带记录一处既有测试的耗时变化，它是真实行为的反映而不是回归。** `GrafanaHttpClient.test.ts` 的 `classifies a non-2xx, non-auth response as kind api-error`（500）、`GrafanaApiClient.test.ts` 的一条 500、以及 `observability/logging.test.ts` 的一条 503 现在都会走完整的默认退避（200ms + 600ms）才失败，各自多花约 800ms。它们的断言仍然成立（`toContain` 对新增的 retry 行不敏感），且这正是这些用例现在真正覆盖的行为，故**未给它们注入更短的退避**——只有本次新增的重试用例传了 `retryBackoffMs: [1, 1]`，那是为了断言策略而不是断言时钟。
 
 **并发协作说明。** 四次提交 `git add` 与 `git commit` 两侧都带显式路径列表，三个新增文件（`src/webview/openPanels.ts`、`test/webview/openPanels.test.ts`、`test/extension/ExtensionLifecycle.test.ts`）沿用前几条台账记下的 CLI 细节——`git commit -- <paths>` 对尚未被 git 跟踪的新文件会报 `error: pathspec … did not match any file(s) known to git`——先 `git add -- <paths>` 再提交。**开工前专门核实了本仓那 20 余个 ` M` 是不是他人的在制品**：`.gitattributes` 为 `* text=auto eol=lf` 而工作区是 CRLF，`git diff --stat` 对它们**没有任何内容 diff**（只打印 `CRLF will be replaced by LF` 警告），即纯换行噪声，与 P6-G2 台账的记载一致；真正有内容改动的只有 `package.json` 与 `package-lock.json` 两个文件，全程未被纳入任何一次提交。变异探针用的临时备份放在 `/tmp` 而非工作区，用完即删。**追加本条前重新读取了台账尾部**——落笔前 `wc -l` 为 1057、末条是 1020 行的 P7-J2（jumpserver 仓），文件以 `\r\n` 结尾，本条落在其后的真实末尾；文件为 CRLF，本条以 CRLF 追加，未对既有内容做任何换行归一化。
+
+### 2026-08-13 · OPS-3 · 非阻塞通知的修复补传到另外两仓，并重测阶段 5 前提
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series、at-grafana-series |
+| 动机 | P6-T 在 terminal 修好了 `showTimedNotification`（`e8d4dbd`），但另外两仓的同名文件当时**逐字节相同**却没拿到修复 |
+| 代码 diff | 两仓各自：`src/utils/notifications.ts` 由 `async` + `await withProgress` 改为同步返回、`void` 触发并吞掉关闭期异常；调用点去掉失去意义的 `await`（jumpserver 14 处、grafana 6 处） |
+| 契约影响 | 否 |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否——三仓至此行为一致 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及 |
+| 验证 | jumpserver `354/354`、grafana `454/454`，两仓 typecheck 零诊断；`rg 'await showTimedNotification' src/` 在两仓均为 0 |
+| 提交 | at-jumpserver-series `60346e5`、at-grafana-series `11d5ac2` |
+
+**实际代价不是理论上的。** 在 jumpserver 上，host key 变更被拒时 SSH 握手白挂 3 秒，每次 SFTP 失败也要卡 3 秒才能进入下一步——因为 `withProgress` 的时长是靠里面 `await delay()` 撑出来的，而调用方 `await` 了整个 `withProgress`。progress 任务属于通知，不属于调用方。
+
+### 2026-08-13 · OPS-4 · 重测阶段 5 前提：重复度格局已因加固而改变
+
+本条不含代码改动，只记录一次测量与由此产生的计划修正。
+
+**总纲原定阶段 5 的第一梯队是「约 610 行零风险、逐字节相同」的文件。加固完成后重测，该前提已不成立：**
+
+| 文件 | 现状 |
+|---|---|
+| `utils/nonce.ts`、`utils/errors.ts`、`mcp/McpConfigInstaller.ts` | 三仓仍逐字节相同 |
+| `webview/terminal/{clipboard,theme,zebra,options}.ts`、`index.css` | terminal ↔ jumpserver 仍相同 |
+| `webview/html.ts`、`sftp/FileSize.ts` | terminal ↔ jumpserver 相同；grafana 已分叉 |
+| **`utils/redaction.ts`** | **三仓全分叉** |
+| `utils/notifications.ts`、`mcp/hubSync.ts`、`webview/terminal/output.ts`、`semanticHighlight.ts` | 已分叉 |
+
+**关键判断：大部分分叉是正确的，不应被抽包抹平。** `redaction.ts` 分叉是因为每个插件学会识别自己实际持有的凭据形态——jumpserver 认 KoKo 的 `token=` 与会话 cookie（P7-J），grafana 认 `glsa_` / `glc_` / pre-9 API key / 路径里的 embed token（P7-G）。硬抽成共享包只会逼出最小公分母，或退化成一堆插件专属配置。`output.ts` 与 `semanticHighlight.ts` 的分叉同理：前者两仓各自改成 base64 + 合批但阈值依域而定，后者 terminal 的按规则折叠去重是为它自己的规则集设计的。
+
+**修正后的阶段 5 建议：** 零风险梯队从约 610 行缩到约 130 行（nonce + errors + McpConfigInstaller + html/FileSize 的 T↔J 部分），收益已不足以支撑单独建包与三仓改造。**更有价值的做法是承认这些副本会各自演进，转而建立「同源文件变更时的对账机制」**——本轮已出现三次同一漂移分散成三次独立排查（`hubSync` 夹具，见 OPS-2）与一次修复未传播（本条 OPS-3）。建议在 hub 仓维护一份同源文件清单，改动其一时提醒核对其余。
+
+**仍然值得抽的是 `mcp/BridgeServer.ts` 的骨架**（三仓 355/486/544 行，HTTP 层、鉴权、`readLimitedBody`、错误信封同构），因为它承载安全语义：本轮「鉴权前置」与「常量时间比较」两项修复各自在三个仓做了三遍。但按 `AGENTS.md` §3.2，通用 Bridge HTTP 框架**不得抽回 mcp-hub 仓**，需另建包或先走 D26 边界变更流程——总纲 §1.1 已记录该约束。
