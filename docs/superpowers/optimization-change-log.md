@@ -779,19 +779,6 @@ AssertionError: expected { …(2) } to deeply equal { secondWrite: 'BLOCKED', pr
 |---|---|
 | 仓库 | at-series-mcp-hub |
 | 动机 | 审计 P2-6：`npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `hub.js`（792 KB）还大；而 `hub.js` 本身未压缩，且被 `copy-hub.mjs` 逐字复制进**三个** VSIX，体积代价付三遍 |
-| 代码 diff | `packages/mcp-hub/esbuild.hub.mjs`：`sourcemap: true` → `false`；新增 `minify: true` 与 `keepNames: true` |
-| 契约影响 | 否 —— 仅构建配置，不改任何导出、类型或线协议 |
-| 文档 diff | 本条目 |
-| protocolVersion | 不变（Bridge 1 / Hub 2） |
-| 插件需跟改 | 否 —— 三插件下次执行 `copy:hub` 时自动拿到更小的产物，无需改代码 |
-| 核心不变量 | 已核对 INV-1..INV-6 均未涉及。INV-1/INV-2 特别确认：入口路径 `~/.at-series/mcp/hub.js` 与 `hub-version.json` 的产出方式未变，仅字节内容更小 |
-| 验证 | `hub.js` **791,874 → 390,267 字节（-50.7
-### 2026-08-13 · P6-H · Hub bundle 压缩，停止产出无人消费的 sourcemap
-
-| 字段 | 内容 |
-|---|---|
-| 仓库 | at-series-mcp-hub |
-| 动机 | 审计 P2-6：`npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `hub.js`（792 KB）还大；而 `hub.js` 本身未压缩，且被 `copy-hub.mjs` 逐字复制进**三个** VSIX，体积代价付三遍 |
 | 代码 diff | `packages/mcp-hub/esbuild.hub.mjs`：`sourcemap: true` 改为 `false`；新增 `minify: true` 与 `keepNames: true` |
 | 契约影响 | 否 —— 仅构建配置，不改任何导出、类型或线协议 |
 | 文档 diff | 本条目 |
