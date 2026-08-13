@@ -272,3 +272,44 @@
 
 **顺带发现（未处理，不属本任务）：** 沙箱外仅剩的 2 个失败均在 `test/docs/JumpServerMcpDocs.test.ts`。该文件是 **untracked**（`git ls-files test/docs/` 输出为空），P0-T2b 的 L112 已记录它「6 月 2 日，断言 hub 化之前的 SKILL.md 文案」。两条断言分别要求 skill 含 `Do not read local VS Code secret storage`（现文案已改为 `Never read local IDE secret storage, cookies, or JumpServer tokens`）、README 含 `JumpServer: Install MCP Config`。属**文案漂移**而非代码缺陷，与本次类型修复无因果关系；需单独裁决是纳入版本控制并更新断言，还是废弃该文件。因其未跟踪，本次未纳入提交。
 
+### 2026-08-13 · P0-T8 · 四仓建立最小 CI 门禁
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-series-mcp-hub、at-terminal-series、at-jumpserver-series、at-grafana-series |
+| 动机 | **X4**：四仓此前无任何 CI。前 7 个任务恢复的可验证性（构建可用、typecheck 干净、测试全绿、生产依赖 0 漏洞）只存在于本机工作区，没有门禁就会随下一次改动重新腐化。P0-T4 已给出实证：`test/mcp/p0c.functional.e2e.test.ts` 自 `260236a` 合入起从未通过 `tsc --noEmit`，能潜伏数月正因为没有类型门禁 |
+| 代码 diff | 四个**新增**文件，无任何既有文件改动。`at-series-mcp-hub/.github/workflows/ci.yml`（+36）单 job 8 步：checkout → setup-node 20（`cache: npm`）→ `npm ci` → `npm run typecheck` → `npm run build` → `npm run build:hub` → `npm test` → `npm audit --omit=dev --audit-level=high`。三插件各 `.github/workflows/ci.yml`（各 +52）内容同构，仅 `path` 与 4 处 `working-directory` 的目录名不同（`diff` 确认三份两两只差这 5 行）：先 checkout 插件到 `<插件目录>`、再 checkout `xwamt/at-series-mcp-hub` 到 `at-series-mcp-hub` 以还原 `file:` 依赖所需的兄弟目录布局，然后在 hub 目录 `npm ci && npm run build && npm run build:hub`，最后在插件目录跑 typecheck / test / audit |
+| 契约影响 | 否。未触及 AGENTS.md §2.1 的任何一项：无线协议字段增删、无 hub 导出面变化、无 installer / hub sync 行为变化。四个文件全部位于 `.github/`，不参与任何构建产物 |
+| 文档 diff | 无 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 **INV-1..INV-6 均未涉及**（纯 CI 配置，`src/**` 零改动）：未触及 MCP 配置入口与 `~/.at-series/mcp/hub.js` 单条 server（INV-1/INV-2）、未触及 Hub 工具 registry 与 `GET /tools`（INV-3）、未触及 `AT_SERIES_TOOL_DISCOVERY` 默认值与渐进发现阈值（INV-4/INV-5）、未触及五个 Hub 元工具的暴露与 risk 分级（INV-6） |
+| 验证 | **本地逐条预演 CI 命令，四仓 14 条全部 exit 0**；本轮**未出现** P0-T3a / P0-T4 记录的 `EPERM mkdir '.../.cursor'` 沙箱失败，四仓测试均在沙箱内真实跑完。**hub：** `npm run typecheck` 0；`npm run build` 0；`npm run build:hub` 0，输出 `Bundled hub.js (0.2.2) -> dist/hub.js`；`npm test` 0，`20 文件 / 109 用例` 全通过（其中依赖 `dist/hub.js` 的 `p0a.e2e.functional.test.ts` 通过，证明工作流把 `build:hub` 排在 `test` 之前既必需又充分）；`npm audit --omit=dev --audit-level=high` 0，`found 0 vulnerabilities`。**at-terminal-series：** typecheck 0；test 0，`59 文件 / 304 用例`；audit 0。**at-jumpserver-series：** typecheck 0；test 0，`35 文件 / 225 用例`；audit 0。**at-grafana-series：** typecheck 0；test 0，`33 文件 / 294 用例`；audit 0。按约定**未**在本地跑 `npm ci`。**工作流本体：** js-yaml 解析四份文件均成功，`jobs.check` 各 8 步、触发器 `push`+`pull_request`、`runs-on: ubuntu-latest`；写入时产生的 CRLF 已归一为 LF，`git show HEAD:.github/workflows/ci.yml` 四仓 blob 的 CR 计数均为 **0**，且从**提交树**取出的内容再次解析成功——这一步必要，因为插件工作流的 `run: \|` 块若残留 `\r`，runner 上的 bash 会把 `npm ci\r` 当作带 CR 的命令而失败。**`.vscodeignore`：** 三插件**原本就已排除** `.github`（terminal `:2`、grafana `:2`、jumpserver `:15` 均为 `.github/**`），Step 3 无需补行。**提交范围：** 四仓 `git show --stat HEAD` 均为 `1 file changed`（36 / 52 / 52 / 52 insertions），提交后 `package.json`、`package-lock.json` 及源码改动仍为未暂存的 ` M`，未被夹带 |
+| 提交 | at-series-mcp-hub `ba5880c`、at-terminal-series `c791e82`、at-jumpserver-series `9910811`、at-grafana-series `ef4b80a`（均在分支 `chore/at-series-optimization-phase0`，未推送远程） |
+
+**已知前提一：插件 CI 依赖跨仓检出，且 hub 检出的是默认分支。** 三个插件工作流用 `actions/checkout` 拉 `xwamt/at-series-mcp-hub` 时**未指定 `ref:`**，因此永远检出该仓的默认分支 `master`。四个仓库经 GitHub API 确认均为 **public**（`private=false`），所以跨仓检出用默认 `GITHUB_TOKEN` 即可，不需要额外 PAT。但代价是：**任何需要 hub 与插件联动的改动，在 hub 侧合入 `master` 之前，插件 CI 都会失败**——因为插件拿到的是旧 hub。此类改动期间需临时给插件工作流加 `ref: <hub 分支名>`，合入后再撤掉。
+
+**已知前提二：四仓 lockfile 的提交状态（对任务预期的一处修正）。** 任务书预期「四仓的 lockfile 都有未提交改动」，实测**只有三个插件如此，hub 不是**：
+
+| 仓库 | lockfile 已跟踪 | 工作区有改动 | package.json 有改动 |
+|---|---|---|---|
+| at-series-mcp-hub | 是 | **否（已于 `5aa74b6` 提交）** | 否 |
+| at-terminal-series | 是 | 是（+368 / -1447） | 是 |
+| at-jumpserver-series | 是 | 是（+900 / -888） | 是 |
+| at-grafana-series | 是 | 是（+304 / -1388） | 是 |
+
+hub 的 lockfile 在 P0-T3a 收尾时已随 `5aa74b6`（`build: reinstall dependencies on this machine…`）提交，因此 hub 的 `npm ci` 在远端有一致的 lockfile 可用。三插件的依赖状态按用户要求继续留在工作区不提交。
+
+**首次运行预判（重要，需用户裁决后才能变绿）：hub 会绿，三个插件会红。** 且插件变红的**首要原因不是 lockfile 不一致，而是「已提交的依赖声明仍指向 npm 上的 0.2.1」**——这比原先设想的更靠前、更硬。证据链逐环已验证：
+
+1. 三插件**已提交**的 `package.json` 与 `package-lock.json` 声明的都是 `"@at-series/mcp-hub": "^0.2.1"`，**不是** `file:../at-series-mcp-hub/packages/mcp-hub`。`file:` 只存在于**未提交的工作区**（属 P0-T3 那批「用户要求先不提交」的依赖改动）。
+2. 因此 CI 的 `npm ci` 会**从 npm registry 装 0.2.1**，跨仓检出来的 hub 目录根本不会被引用——「Check out the hub / Build the hub」两步在当前提交状态下是空转。
+3. 三插件**已提交**的源码（`src/extension.ts`、`src/mcp/McpConfigInstaller.ts`）都 `import { detectHostApp } from '@at-series/mcp-hub'`，且本地兜底 `src/mcp/hostApp.ts` 已在 P0-T2b 被删除（`git cat-file -e HEAD:src/mcp/hostApp.ts` 三仓均返回非零）。
+4. npm 上 `@at-series/mcp-hub` 的已发布版本只有 `0.1.0 / 0.1.1 / 0.2.0 / 0.2.1`，`latest` 为 **0.2.1**；拉取 `0.2.1` 的 `dist/index.d.ts` 与 `dist/protocol/index.d.ts` 均**不含** `detectHostApp` / `slugifyHostAppId`。
+
+⇒ 插件 CI 会走到 **`Typecheck` 步失败**（`@at-series/mcp-hub` 无导出成员 `detectHostApp`），`npm ci` 本身反而不会失败（已提交的 package.json 与 lockfile 互相自洽，都是 `^0.2.1`）。
+
+**第二重阻塞（即使提交了 `file:` 依赖也仍会红）：** hub 的 `origin/master` 比本地分支**落后 16 个提交**，`packages/mcp-hub/src/protocol/detectHostApp.ts` 在 `origin/master` 上**根本不存在**（`git cat-file -e origin/master:…` 报 `exists on disk, but not in 'origin/master'`），其 `protocol/index.ts` 也不含该导出。而插件工作流检出的正是 hub 的 `master`。`git ls-remote` 确认远端 `master` 与本地 `origin/master` 同为 `891f953`，排除本地引用陈旧的可能。
+
+**要让插件 CI 变绿，需用户依次裁决三件事：** (1) 把 hub 的 `chore/at-series-optimization-phase0` 合入 `master` 并推送，使 `detectHostApp` 进入 hub 默认分支；(2) 提交三插件的 `package.json`（`^0.2.1` → `file:`）与重建后的 `package-lock.json`，否则 `npm ci` 装的仍是 npm 上的旧包；(3) 推送各插件分支。另注意 `on.push.branches` 只含 `[master, main]`，**推送 `chore/at-series-optimization-phase0` 分支本身不会触发任何 job**，需开 PR（`pull_request` 触发）或合入默认分支后才会跑。
+
