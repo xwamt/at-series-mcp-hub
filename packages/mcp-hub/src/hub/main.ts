@@ -4,14 +4,15 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema
 } from '@modelcontextprotocol/sdk/types.js';
-import { AT_SERIES_HOST_APP_ENV, MCP_SERVER_DISPLAY_NAME } from '../protocol/index';
+import { MCP_SERVER_DISPLAY_NAME } from '../protocol/index';
 import { toMcpToolDescriptors } from './annotations';
+import { resolveHostAppFromEnv } from './hostApp';
 import { createHubRuntime } from './server';
 
 declare const __HUB_VERSION__: string;
 
 async function main(): Promise<void> {
-  const hostApp = process.env[AT_SERIES_HOST_APP_ENV] ?? 'unknown';
+  const hostApp = resolveHostAppFromEnv(process.env);
   const hubVersion =
     typeof __HUB_VERSION__ === 'string' && __HUB_VERSION__.length > 0
       ? __HUB_VERSION__
