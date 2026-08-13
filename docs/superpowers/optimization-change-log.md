@@ -155,6 +155,46 @@
 
 **遗留：** `at-jumpserver-series/.gitignore` 工作区仍是 CRLF，但其索引已因 P0-T1 的 `.gitattributes` 归一为 LF，clone 出来是干净的；本地表现将在下次触碰该文件时自动消除。
 
+### 2026-08-13 · P0-T3 · 改用本地构建依赖，恢复三插件可构建（不发 npm）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-terminal-series、at-jumpserver-series、at-grafana-series（+ at-series-mcp-hub 构建产物） |
+| 动机 | X2：三插件在 P0-T2b 后构建失败（已改从 hub 导入 `detectHostApp`，npm 上的 0.2.1 无此导出） |
+| 代码 diff | 无源码改动。三仓 `package-lock.json` 因 `rm -rf node_modules && npm install` 重新生成；`package.json` 的 `file:` 依赖声明保持不变 |
+| 契约影响 | 否（契约变更已记在 P0-T2b） |
+| 文档 diff | `plans/2026-08-13-phase0-restore-verifiability.md` 的 Task 3 全部重写、Task 7 加已解决说明、Task 8 的插件工作流改为跨仓检出 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否——依赖声明维持现状 |
+| 核心不变量 | 已核对 INV-1..INV-6。INV-1 特别确认：VSIX 内 `hub-version.json` 为 `{"version":"0.2.2","protocolVersion":2}`，`syncHubBundle` 的单一入口语义未变 |
+| 验证 | 三仓 `node_modules/@at-series/mcp-hub` 均为指向本地 hub 的符号链接，版本 `0.2.2`；terminal typecheck 干净 + **304/304** 测试通过；grafana typecheck 干净 + **294/294** 测试通过；jumpserver 余 4 个类型错误（交 Task 4）。VSIX 端到端验证：`npm run package:mcp` 产出的 `extension/dist/hub.js` 与本地 `packages/mcp-hub/dist/hub.js` sha256 **完全一致**（`af7add5ff61cca88f7da…`），`extension.js` 中 `slugifyHostAppId` 命中 9 次证明 hub 代码已内联 |
+| 提交 | 待提交（用户要求先不提交） |
+
+**决策变更（第三版，最终）：** 用户决定**不发布 npm 包**，改为保持 `file:` 本地构建依赖、hub 产物直接打进 VSIX。此前第一版「回退 `^0.2.1`」被 P0-T2a 证伪，第二版「发布 0.2.2」已完成全部发版前验证但不执行。
+
+**这一决策的三项代价（已写进计划 Task 3，后续任务须遵守）：**
+
+1. **构建顺序依赖**——必须先在 hub 仓 `npm run build && npm run build:hub`，插件才能装/构建；hub 的 `dist/` 是 gitignored，干净检出后不存在。
+2. **CI 必须跨仓检出**——三个插件各自是独立 GitHub 仓库，`file:../at-series-mcp-hub/...` 在单仓 CI 里不存在。Task 8 的插件工作流已改为先 `actions/checkout` hub 仓、构建，再装插件依赖。
+3. **VSIX 不可复现**——产物内容取决于构建时 hub 工作区的状态，含未提交改动。发布正式版本前应确认 hub 处于干净且已打标签的状态。
+
+### 2026-08-13 · P0-T7 · 依赖漏洞随 lockfile 重建而清零（无需手动升级）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | 四仓 |
+| 动机 | X5：jumpserver 7 个漏洞（4 high，含直接依赖 `ws@8.18.0` 的内存耗尽 DoS），hub 2 个（经 MCP SDK 传入的 hono） |
+| 代码 diff | 无。`package.json` 的版本范围一行未改 |
+| 契约影响 | 否 |
+| 文档 diff | 计划 Task 7 加「已被 Task 3 解决」说明 |
+| protocolVersion | 不变 |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及 |
+| 验证 | 四仓 `npm audit --omit=dev` 均输出 `found 0 vulnerabilities`；`ws` 解析到 **8.21.3**（越过 `8.0.0–8.20.1`），`@modelcontextprotocol/sdk` 解析到 **1.30.0** |
+| 提交 | 随 P0-T3 的 lockfile 一并提交（待提交） |
+
+**根因修正：** 漏洞来自**陈旧 lockfile 把传递依赖钉死在旧版本**，而非 `package.json` 的版本范围写错。原计划的「手动升级 ws / MCP SDK」是误判——删除 lockfile 重装即全部解决。**教训：报告依赖漏洞前，应先确认是版本范围问题还是 lockfile 陈旧问题。**
+
 ### 2026-08-13 · P0-T5 · 补 .gitignore 缺口并清理已跟踪的 bridge 测试残留
 
 | 字段 | 内容 |
@@ -180,4 +220,26 @@
 - 三仓 `.gitignore` 的 CRLF 需归一到 LF 以消除空模式。其中 `at-series-mcp-hub` 的 CRLF **已提交进索引**（`git show HEAD:.gitignore` 含 24 个 `\r`），terminal-series 与 jumpserver 只是工作区 CRLF、索引已是 LF（P0-T1 的 `.gitattributes` `* text=auto eol=lf` 生效）。修复 hub 那份需要真实改动 blob，与「本轮不做 renormalize」的约定冲突，留待后续阶段。
 
 **遗留根因（本任务只做止血，未修）：** `at-terminal-series/src/sftp/SftpEditSessionManager.ts:74` 把 SFTP「编辑远程文件」的暂存目录放在**当前工作区根目录**下的 `.ssh-terminal-manager/`，而非扩展的 `globalStorageUri`。后果是：开发者把任意仓库当工作区打开并编辑远程文件时，服务器上的文件明文副本会直接落进那个仓库的工作树——grafana 仓里的空 `sftp-edit` 目录就是这么来的。本任务只给 grafana 补了忽略规则，属止血；把暂存目录迁到 `globalStorageUri` 的根因修复留待后续阶段。
+
+### 2026-08-13 · P0-T6 · grafana 入口图标纳入版本控制，修复全新 clone 无法打包
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-grafana-series |
+| 动机 | **G8**：`package.json:8` 的 `"icon": "media/at-grafana-icon.png"`（Marketplace 图标）与 `package.json:39` 的 `contributes.viewsContainers.activitybar[0].icon: "media/at-grafana-activity.svg"`（活动栏容器图标）所引用的资产**从未纳入版本控制**（`?? media/at-grafana-*`），而 `scripts/package.mjs` 在打包时对三个 logo 资产做**硬断言**。二者叠加的后果是：从远端全新 clone 后执行 `npm run package` **必然失败**，此前只在恰好持有未跟踪文件的本机上能过。同时收尾 P0-T2b 记录的**第三条在制品「入口 logo / 打包资产」**（见本台账 L109、L114 的归属判定） |
+| 代码 diff | **新增并跟踪 3 个资产**：`media/at-grafana-icon.png`（二进制 3124 B，git 记为 `Bin 0 -> 3124 bytes`）、`media/at-grafana-icon.svg`（+6）、`media/at-grafana-activity.svg`（+5）。**删除失效条目**：`media/icon.svg`（`git rm --cached`，-3）——原通用黑色柱状图占位符，已被新的 G 变体图标集取代且早已从工作树消失，索引里再留着就是指向不存在文件的悬空路径。**打包链路**：`scripts/package.mjs:20-33` +17/-1，把原先「拷 media 失败就静默吞掉」的 `.catch(() => {})` 改为强制拷贝，并逐个 `access()` 三个资产、校验 manifest 的 `icon` 与 activitybar icon 路径逐字匹配；`.vscodeignore:23-25` +3，写明保留 media 入口图标、禁止再加宽泛的 `media/**` 排除 |
+| 契约影响 | 否。未触及 AGENTS.md §2.1 的任何一项：无线协议字段增删、无 hub 导出面变化、无 installer / hub sync 行为变化 |
+| 文档 diff | `docs/plans/2026-07-30-at-grafana-entry-logo-design.md` ±14（G 弧线 path 移入**右半区**，与 chevron 拉开间隙不再重叠；crossbar 改为只探进开口）。仅设计文档，非 `docs/protocol/**` 契约文档 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 **INV-1..INV-6 均未涉及**（纯打包资产与构建脚本）。逐条确认：本次提交的 7 个文件中**无任何 `src/**`**，未触及 MCP 配置入口与 `~/.at-series/mcp/hub.js` 单条 server（INV-1/INV-2）、未触及 Hub 工具 registry 与 `GET /tools`（INV-3）、未触及 `AT_SERIES_TOOL_DISCOVERY` 默认值与渐进发现阈值（INV-4/INV-5）、未触及五个 Hub 元工具的暴露与 risk 分级（INV-6） |
+| 验证 | **资产合法性：** `file` 输出 `at-grafana-icon.png: PNG image data, 128 x 128, 8-bit/color RGBA, non-interlaced`（`sips` 复核 `pixelWidth: 128` / `pixelHeight: 128`，满足 VS Code Marketplace 的 128×128 下限），另两个为合法 SVG。**未被忽略：** `git check-ignore -v` 对三个文件均无输出（exit 1）；按 P0-T5b 的教训做了**对照实验**——不存在的路径 `media/__definitely_not_real__.png` 同样 exit 1，说明**不存在 CRLF 空模式假阳性**（grafana 的 `.gitignore` 是 LF）。**路径逐字匹配：** `rg -n 'media/' package.json` 得 `8:"icon": "media/at-grafana-icon.png"` 与 `39:"icon": "media/at-grafana-activity.svg"`，与磁盘文件名大小写完全一致。**打包端到端：** `npm run build` 通过；`node scripts/package.mjs` 成功，vsce 3.9.2 输出 ` DONE  Packaged: .../.package-work/vsix/at-grafana-0.1.0.vsix (13 files, 255.9 KB)`，**无任何 missing asset / access 断言报错**。**产物内含图标：** `unzip -l` 得 `extension/media/at-grafana-icon.svg` **557 B**、`extension/media/at-grafana-icon.png` **3124 B**、`extension/media/at-grafana-activity.svg` **533 B**，三者与源文件字节数逐一相等，证明 `.gitattributes` 的 `*.png binary` 生效、PNG 未被换行符处理污染。**提交范围：** `git show --stat HEAD` 为 `7 files changed, 37 insertions(+), 11 deletions(-)`；提交后 `src/**`、`test/**`、`webview/**`、`package.json`、`package-lock.json` 均仍为未暂存的 ` M`，未被夹带 |
+| 提交 | at-grafana-series `a1b2159`（分支 `chore/at-series-optimization-phase0`，未推送远程） |
+
+**为什么这是「必然失败」而非「偶发」：** `scripts/package.mjs` 原本写的是 `await cp(root/media, stage/media).catch(() => {})`——媒体目录拷不到就静默吞掉，因此缺图标时打包**不会报错，只会产出一个没有图标的 VSIX**。本条在制品把它改成强制拷贝 + 三个 `access()` 断言后，缺失才变成显式失败。也就是说断言本身是**正确的加固**，但它与「资产未跟踪」同时存在，就把一个静默降级问题升级成了全新 clone 的硬失败。两者必须一起提交，只提交其中一半都会让仓库处于更坏的状态。
+
+**与预期不符处（如实记录）：**
+
+- **多出一个 ` M docs/plans/2026-07-29-at-grafana-v1-implementation-plan.md`**，任务书未提及。核查后确认其 `git diff` **为空**，仅有 `warning: CRLF will be replaced by LF` ——是工作区 CRLF / 索引 LF 造成的 stat 假阳性，与 P0-T2b 中记录的 21 个同类假阳性同源，**无实际内容改动**，故未纳入本次提交。
+- **P0-T2b 的 L114 判定「terminal 的 `0.3.0.md` 链接改动随 Task 6 一并提交」未执行。** 本任务的约束明确限定只改 `at-grafana-series`（台账除外）、不得触碰其他仓库，两者冲突时以任务约束为准。`at-terminal-series/docs/releases/0.3.0.md`（ADR 相对链接改 GitHub 绝对 URL）**仍为未提交状态**，需另行安排归属。
 
