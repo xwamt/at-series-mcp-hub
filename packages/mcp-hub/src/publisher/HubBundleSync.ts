@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import path from 'node:path';
 import semver from 'semver';
+import { atomicWriteFile, ensureDir } from '../fs/atomicWrite';
 import {
   AT_SERIES_HUB_PROTOCOL_VERSION,
   type HubVersionRecord
@@ -46,8 +46,8 @@ export async function syncHubBundle(input: {
     }
   }
 
-  await fs.mkdir(mcpDir(home), { recursive: true });
-  await atomicWriteBytes(targetHub, candidateBytes);
+  await ensureDir(mcpDir(home));
+  await atomicWriteFile(targetHub, candidateBytes);
 
   const meta: HubVersionRecord = {
     version: input.version,
@@ -57,7 +57,7 @@ export async function syncHubBundle(input: {
     writtenAt: Date.now(),
     bundleSha256: candidateSha
   };
-  await atomicWriteText(targetMeta, JSON.stringify(meta, null, 2));
+  await atomicWriteFile(targetMeta, JSON.stringify(meta, null, 2));
 
   return { updated: true, activeVersion: input.version };
 }
@@ -73,35 +73,5 @@ async function readActiveVersion(
       return undefined;
     }
     throw err;
-  }
-}
-
-async function atomicWriteBytes(
-  filePath: string,
-  content: Buffer
-): Promise<void> {
-  const dir = path.dirname(filePath);
-  const tmpPath = path.join(
-    dir,
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
-  );
-  await fs.writeFile(tmpPath, content);
-  await tryChmod(tmpPath, 0o600);
-  await fs.rename(tmpPath, filePath);
-  await tryChmod(filePath, 0o600);
-}
-
-async function atomicWriteText(
-  filePath: string,
-  content: string
-): Promise<void> {
-  await atomicWriteBytes(filePath, Buffer.from(content, 'utf8'));
-}
-
-async function tryChmod(target: string, mode: number): Promise<void> {
-  try {
-    await fs.chmod(target, mode);
-  } catch {
-    // Windows and some filesystems: best-effort
   }
 }
