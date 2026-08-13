@@ -2,6 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   AT_SERIES_BRIDGE_PROTOCOL_VERSION,
+  isBridgeEndpointPath,
+  isBridgePort,
+  PLUGIN_ID_PATTERN,
+  TOOL_NAME_PATTERN,
   type BridgeRegistryRecord,
   type HostApp
 } from '../protocol/index';
@@ -18,6 +22,39 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * `endpoints` is the only field a record can use to steer where the Hub sends
+ * an authenticated POST. Anything but a conformant path override invalidates
+ * the whole record rather than being silently dropped, so a writer cannot
+ * smuggle a target past the Hub by making the rest of the record look healthy.
+ */
+function hasValidEndpoints(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const endpoints = value as Record<string, unknown>;
+  for (const key of ['health', 'tools', 'invoke'] as const) {
+    if (endpoints[key] !== undefined && !isBridgeEndpointPath(endpoints[key])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Catalog entries must at least carry a protocol §4.4 conformant name. */
+function hasValidToolNames(tools: unknown[]): boolean {
+  return tools.every((tool) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
+      return false;
+    }
+    const name = (tool as Record<string, unknown>).name;
+    return typeof name === 'string' && TOOL_NAME_PATTERN.test(name);
+  });
 }
 
 /**
@@ -40,7 +77,7 @@ export function parseBridgeRegistryRecord(
   if (!isNonEmptyString(raw.bridgeId)) {
     return null;
   }
-  if (!isNonEmptyString(raw.pluginId)) {
+  if (!isNonEmptyString(raw.pluginId) || !PLUGIN_ID_PATTERN.test(raw.pluginId)) {
     return null;
   }
   if (!isNonEmptyString(raw.pluginDisplayName)) {
@@ -55,7 +92,7 @@ export function parseBridgeRegistryRecord(
   if (expectedHostApp !== undefined && raw.hostApp !== expectedHostApp) {
     return null;
   }
-  if (!isFiniteNumber(raw.port)) {
+  if (!isBridgePort(raw.port)) {
     return null;
   }
   if (!isNonEmptyString(raw.token)) {
@@ -67,7 +104,10 @@ export function parseBridgeRegistryRecord(
   if (!isFiniteNumber(raw.updatedAt)) {
     return null;
   }
-  if (!Array.isArray(raw.tools)) {
+  if (!hasValidEndpoints(raw.endpoints)) {
+    return null;
+  }
+  if (!Array.isArray(raw.tools) || !hasValidToolNames(raw.tools)) {
     return null;
   }
 

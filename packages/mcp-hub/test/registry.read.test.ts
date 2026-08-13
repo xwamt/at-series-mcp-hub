@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { listBridgeRecords } from '../src/registry/read';
+import {
+  listBridgeRecords,
+  parseBridgeRegistryRecord
+} from '../src/registry/read';
 
 function validRecord(overrides: Record<string, unknown> = {}) {
   return {
@@ -101,5 +104,145 @@ describe('listBridgeRecords', () => {
 
   it('returns empty array when directory is missing', async () => {
     expect(await listBridgeRecords({ hostApp: 'cursor', home })).toHaveLength(0);
+  });
+
+  it('skips a record with an out-of-range port instead of throwing', async () => {
+    await writeRecord(home, 'cursor', 'ok.json', validRecord({ bridgeId: 'ok' }));
+    await writeRecord(
+      home,
+      'cursor',
+      'bad-port.json',
+      validRecord({ bridgeId: 'bad-port', port: 70000 })
+    );
+    const records = await listBridgeRecords({ hostApp: 'cursor', home });
+    expect(records.map((r) => r.bridgeId)).toEqual(['ok']);
+  });
+
+  it('skips a record whose endpoints escape the Bridge path space', async () => {
+    await writeRecord(
+      home,
+      'cursor',
+      'ssrf.json',
+      validRecord({
+        bridgeId: 'ssrf',
+        port: 2375,
+        endpoints: { invoke: '/v1.41/containers/create' }
+      })
+    );
+    await writeRecord(
+      home,
+      'cursor',
+      'traversal.json',
+      validRecord({ bridgeId: 'traversal', endpoints: { invoke: '/../admin' } })
+    );
+    const records = await listBridgeRecords({ hostApp: 'cursor', home });
+    expect(records.map((r) => r.bridgeId)).toEqual(['ssrf']);
+  });
+});
+
+describe('parseBridgeRegistryRecord port validation', () => {
+  it.each([0, -1, 3.14, 70000, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects port %p',
+    (port) => {
+      expect(parseBridgeRegistryRecord(validRecord({ port }))).toBeNull();
+    }
+  );
+
+  it.each([1, 65535, 53123])('accepts port %p', (port) => {
+    expect(parseBridgeRegistryRecord(validRecord({ port }))?.port).toBe(port);
+  });
+});
+
+describe('parseBridgeRegistryRecord endpoints validation', () => {
+  it.each(['/../admin', '//evil', 'not-a-path', '/x?y=1', '/a/../../b', ''])(
+    'rejects endpoints.invoke %p',
+    (invoke) => {
+      expect(
+        parseBridgeRegistryRecord(validRecord({ endpoints: { invoke } }))
+      ).toBeNull();
+    }
+  );
+
+  it.each(['/invoke', '/api/v1/invoke', '/', '/at-series/invoke_v2'])(
+    'accepts endpoints.invoke %p',
+    (invoke) => {
+      expect(
+        parseBridgeRegistryRecord(validRecord({ endpoints: { invoke } }))
+          ?.endpoints?.invoke
+      ).toBe(invoke);
+    }
+  );
+
+  it('applies the same rule to health and tools overrides', () => {
+    expect(
+      parseBridgeRegistryRecord(
+        validRecord({ endpoints: { health: 'http://evil.test/health' } })
+      )
+    ).toBeNull();
+    expect(
+      parseBridgeRegistryRecord(validRecord({ endpoints: { tools: '/../../tools' } }))
+    ).toBeNull();
+  });
+
+  it('rejects a non-string endpoint override', () => {
+    expect(
+      parseBridgeRegistryRecord(validRecord({ endpoints: { invoke: 42 } }))
+    ).toBeNull();
+  });
+
+  it('rejects endpoints that is not a plain object', () => {
+    expect(parseBridgeRegistryRecord(validRecord({ endpoints: ['/invoke'] }))).toBeNull();
+    expect(parseBridgeRegistryRecord(validRecord({ endpoints: '/invoke' }))).toBeNull();
+  });
+
+  it('accepts a record without endpoints', () => {
+    expect(parseBridgeRegistryRecord(validRecord())?.bridgeId).toBe('a');
+  });
+});
+
+describe('parseBridgeRegistryRecord identifier validation', () => {
+  it.each(['at.terminal', 'at.jumpserver', 'at.grafana'])(
+    'accepts pluginId %p',
+    (pluginId) => {
+      expect(parseBridgeRegistryRecord(validRecord({ pluginId }))?.pluginId).toBe(
+        pluginId
+      );
+    }
+  );
+
+  it.each(['AT.Terminal', 'terminal', 'at..terminal', 'at.terminal.', '../evil'])(
+    'rejects pluginId %p',
+    (pluginId) => {
+      expect(parseBridgeRegistryRecord(validRecord({ pluginId }))).toBeNull();
+    }
+  );
+
+  it('accepts a catalog of protocol-conformant tool names', () => {
+    const record = parseBridgeRegistryRecord(
+      validRecord({
+        tools: [
+          { name: 'list_ssh_servers', risk: 'read' },
+          { name: 'jumpserver_sftp_read_file', risk: 'read' }
+        ]
+      })
+    );
+    expect(record?.tools.map((t) => t.name)).toEqual([
+      'list_ssh_servers',
+      'jumpserver_sftp_read_file'
+    ]);
+  });
+
+  it.each(['ListSshServers', '../evil', '', 'list-ssh-servers', '_leading'])(
+    'rejects a catalog containing tool name %p',
+    (name) => {
+      expect(
+        parseBridgeRegistryRecord(validRecord({ tools: [{ name, risk: 'read' }] }))
+      ).toBeNull();
+    }
+  );
+
+  it('rejects a catalog entry that is not an object', () => {
+    expect(parseBridgeRegistryRecord(validRecord({ tools: [null] }))).toBeNull();
+    expect(parseBridgeRegistryRecord(validRecord({ tools: ['list_ssh_servers'] }))).toBeNull();
   });
 });

@@ -260,6 +260,32 @@ export interface HubBundleSync {
 export const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/;
 export const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
+/**
+ * Allowed characters in a Bridge endpoint path override (protocol §5.2).
+ * Deliberately narrow: the value is concatenated onto `http://127.0.0.1:<port>`,
+ * so anything that can start a query, fragment, or authority section must not
+ * survive validation.
+ */
+export const BRIDGE_ENDPOINT_PATH_PATTERN = /^\/[A-Za-z0-9._~\-\/]*$/;
+
+/**
+ * A conformant endpoint override: absolute, single-segment-separated, and free
+ * of `..` so it cannot climb out of the path space the Bridge advertised.
+ */
+export function isBridgeEndpointPath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    BRIDGE_ENDPOINT_PATH_PATTERN.test(value) &&
+    !value.includes('..') &&
+    !value.includes('//')
+  );
+}
+
+/** Registry `port`: an integer in the usable TCP range. */
+export function isBridgePort(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
 export function isToolRisk(value: unknown): value is ToolRisk {
   return value === 'read' || value === 'write' || value === 'exec';
 }
@@ -273,12 +299,24 @@ export function isAutoApproveRisk(risk: ToolRisk): boolean {
   return risk === 'read';
 }
 
+/**
+ * Records read through `parseBridgeRegistryRecord` already had their overrides
+ * validated, but this is also called directly on caller-supplied records. A
+ * non-conformant override falls back to the protocol default instead of
+ * throwing, so an outbound request can never be aimed at an attacker-chosen
+ * path.
+ */
 export function resolveBridgeEndpoints(
   record: Pick<BridgeRegistryRecord, 'endpoints'>
 ): BridgeEndpoints {
+  const override = (
+    value: string | undefined,
+    fallback: string
+  ): string => (isBridgeEndpointPath(value) ? value : fallback);
+
   return {
-    health: record.endpoints?.health ?? DEFAULT_BRIDGE_ENDPOINTS.health,
-    tools: record.endpoints?.tools ?? DEFAULT_BRIDGE_ENDPOINTS.tools,
-    invoke: record.endpoints?.invoke ?? DEFAULT_BRIDGE_ENDPOINTS.invoke
+    health: override(record.endpoints?.health, DEFAULT_BRIDGE_ENDPOINTS.health),
+    tools: override(record.endpoints?.tools, DEFAULT_BRIDGE_ENDPOINTS.tools),
+    invoke: override(record.endpoints?.invoke, DEFAULT_BRIDGE_ENDPOINTS.invoke)
   };
 }
