@@ -772,3 +772,35 @@ AssertionError: expected { …(2) } to deeply equal { secondWrite: 'BLOCKED', pr
 **G6 是怎么划清「Agent 调用路径」与「用户交互路径」的，以及为什么能确认没让正常使用变卡。** 先做静态确认：`rg 'QueryLimits\|clampQueryTimeRange'` 显示 `QueryLimits.ts` 在 `src/` 下的唯一调用点是 `GrafanaAgentToolService.queryDatasource`，而它只在 `invoke('grafana_query_datasource', …)` 这一个分支上被调用；用户手动打开仪表盘走的是 `GrafanaEmbedProxy`（Webview iframe → 本地反向代理 → Grafana），两条路径**不共享任何一行代码**，连 HTTP 客户端都不是同一个（前者 `GrafanaHttpClient`，后者裸 `http.request`）。所以边界不是本次划出来的，而是本来就存在，本次只是确认后把限流放在了正确的一侧。**两条正面用例把这个边界钉住**：`does not meter the management tools, which cost Grafana almost nothing` 用容量为 1 的限流器连发 10 次管理类工具调用全部成功（证明计量没有溢出到 `grafana_query_datasource` 之外）；G5 新增的代理用例全部不经过任何限流器（证明交互路径未被波及）。**反过来说，正因为边界干净，G6 的预算才敢定得足够紧到有意义**——60 次/分钟、4 并发、1000 点、10s 超时，若这些数字要同时覆盖用户拖动时间轴的仪表盘，就只能放宽到形同虚设。**一处诚实的取舍**：这些新增预算是**代码常量，不是 VS Code 设置**——任务书要求不改 `package.json`，而没有 `contributes.configuration` 就没有设置可读；且未经真实 Prometheus/Loki 标定就先放出旋钮，只会让人把它调到不再保护任何东西（`maxRangeMs` / `maxResponseBytes` 两个既有设置维持原样可配）。
 
 **限流的失败语义为什么选 `UNAVAILABLE`/503 而不是复用既有的成功信封。** `QueryLimits` 既有的两个截断信封（`time-range` / `response-size`）以 `ok: true` 返回，本次一度考虑沿用同一形状。最终没有：截断信封描述的是「请求成功了，但结果被裁剪」，而限流是「请求根本没有发生」，用 `ok: true` 表达会让 Agent 把一次未执行的调用当作数据。选 503 前已核实它不会误伤 Hub 的健康判定（见「契约影响」栏）。措辞上也做了约束——错误文案明写「temporary resource limit, not an access restriction: retry the same call in Nms」，因为这条消息会直接进 Agent 的上下文，读成「你没有权限」会诱导它放弃而不是重试。
+
+### 2026-08-13 · P6-H · Hub bundle 压缩，停止产出无人消费的 sourcemap
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-series-mcp-hub |
+| 动机 | 审计 P2-6：`npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `hub.js`（792 KB）还大；而 `hub.js` 本身未压缩，且被 `copy-hub.mjs` 逐字复制进**三个** VSIX，体积代价付三遍 |
+| 代码 diff | `packages/mcp-hub/esbuild.hub.mjs`：`sourcemap: true` → `false`；新增 `minify: true` 与 `keepNames: true` |
+| 契约影响 | 否 —— 仅构建配置，不改任何导出、类型或线协议 |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 —— 三插件下次执行 `copy:hub` 时自动拿到更小的产物，无需改代码 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及。INV-1/INV-2 特别确认：入口路径 `~/.at-series/mcp/hub.js` 与 `hub-version.json` 的产出方式未变，仅字节内容更小 |
+| 验证 | `hub.js` **791,874 → 390,267 字节（-50.7
+### 2026-08-13 · P6-H · Hub bundle 压缩，停止产出无人消费的 sourcemap
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-series-mcp-hub |
+| 动机 | 审计 P2-6：`npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `hub.js`（792 KB）还大；而 `hub.js` 本身未压缩，且被 `copy-hub.mjs` 逐字复制进**三个** VSIX，体积代价付三遍 |
+| 代码 diff | `packages/mcp-hub/esbuild.hub.mjs`：`sourcemap: true` 改为 `false`；新增 `minify: true` 与 `keepNames: true` |
+| 契约影响 | 否 —— 仅构建配置，不改任何导出、类型或线协议 |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 —— 三插件下次执行 `copy:hub` 时自动拿到更小的产物，无需改代码 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及。INV-1/INV-2 特别确认：入口路径 `~/.at-series/mcp/hub.js` 与 `hub-version.json` 的产出方式未变，仅字节内容更小 |
+| 验证 | `hub.js` **791,874 到 390,267 字节，减少 50.7 个百分点**；`dist/hub.js.map` 不再产出（原 1,380,463 字节）；`rg sourceMappingURL dist/hub.js` 零匹配，无悬空引用。**功能验证走真实进程**：`p0a.e2e.functional.test.ts` 3/3 通过——该用例实际 spawn `dist/hub.js` 并完成 registry 到 health/tools/invoke 到 installer 到 hub sync 全链路，是压缩未破坏运行时的直接证据。全量 `npm test` **29 文件 / 346 用例**全绿，typecheck 零诊断 |
+| 提交 | `e61747f`（1 文件），分支 `chore/at-series-optimization-phase0`，未推送 |
+
+**为什么开 `keepNames`。** 压缩会把函数名改成单字母，而 P1-B 刚给 Hub 加的 stderr logger 是它在 IDE 里运行时**唯一**的诊断通道——如果栈帧全是 `a`/`b`/`c`，那个 logger 的价值会被大幅削弱。`keepNames` 保留 `Function.prototype.name`，用少量体积换回可读的栈。
+
+**为什么不是保留 sourcemap 而把它排除出 npm 包。** 那样会在 `hub.js` 末尾留下指向不存在文件的 `//# sourceMappingURL`（`at-grafana-series` 此刻正有同样的悬空引用问题，已交由并行任务处理）。既然 `copy-hub.mjs` 只复制 `hub.js`、map 在任何分发形态下都到不了调试器手里，直接不产出才是诚实的。
