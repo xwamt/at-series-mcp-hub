@@ -133,6 +133,131 @@ describe('atomicWriteFile', () => {
   });
 });
 
+describe('atomicWriteFile with mode "preserve"', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'at-series-preserve-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('writes the exact content', async () => {
+    const target = path.join(root, 'mcp.json');
+    await atomicWriteFile(target, '{"a":1}', { mode: 'preserve' });
+
+    expect(await fs.readFile(target, 'utf8')).toBe('{"a":1}');
+  });
+
+  it.skipIf(isWindows)('keeps the permissions the target file already had', async () => {
+    // ~/.cursor/mcp.json belongs to the user, not to us. Rewriting their MCP
+    // config must not silently re-permission it.
+    const target = path.join(root, 'mcp.json');
+    await fs.writeFile(target, 'old', { mode: 0o644 });
+
+    await atomicWriteFile(target, 'new', { mode: 'preserve' });
+
+    expect(await modeOf(target)).toBe(0o644);
+    expect(await fs.readFile(target, 'utf8')).toBe('new');
+  });
+
+  it.skipIf(isWindows)('keeps unusually tight permissions too', async () => {
+    const target = path.join(root, 'mcp.json');
+    await fs.writeFile(target, 'old', { mode: 0o600 });
+
+    await atomicWriteFile(target, 'new', { mode: 'preserve' });
+
+    expect(await modeOf(target)).toBe(0o600);
+  });
+
+  it.skipIf(isWindows)('creates a missing file with the process default mode', async () => {
+    const control = path.join(root, 'control');
+    await fs.writeFile(control, 'x');
+    const target = path.join(root, 'mcp.json');
+
+    await atomicWriteFile(target, 'new', { mode: 'preserve' });
+
+    expect(await modeOf(target)).toBe(await modeOf(control));
+  });
+
+  it.skipIf(isWindows)('never widens the target through the temp file', async () => {
+    // The temp file is the only other place the content lives. For a 0600
+    // target it must not appear at 0644 even briefly.
+    const target = path.join(root, 'mcp.json');
+    await fs.writeFile(target, 'old', { mode: 0o600 });
+    const seen: number[] = [];
+    const sampler = setInterval(() => {
+      void (async () => {
+        for (const entry of await fs.readdir(root).catch(() => [])) {
+          const mode = await modeOf(path.join(root, entry)).catch(() => -1);
+          if (mode >= 0) {
+            seen.push(mode);
+          }
+        }
+      })();
+    }, 1);
+
+    await atomicWriteFile(target, 'x'.repeat(4 * 1024 * 1024), {
+      mode: 'preserve'
+    });
+    clearInterval(sampler);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const mode of seen) {
+      expect(mode).toBe(0o600);
+    }
+  });
+
+  it.skipIf(isWindows)('leaves an existing parent directory untouched', async () => {
+    const dir = path.join(root, 'dot-cursor');
+    await fs.mkdir(dir, { mode: 0o755 });
+    const target = path.join(dir, 'mcp.json');
+
+    await atomicWriteFile(target, 'new', { mode: 'preserve' });
+
+    expect(await modeOf(dir)).toBe(0o755);
+  });
+
+  it.skipIf(isWindows)(
+    'creates missing parent directories at the process default mode',
+    async () => {
+      const control = path.join(root, 'control-dir');
+      await fs.mkdir(control);
+      const target = path.join(root, 'dot-cursor', 'mcp.json');
+
+      await atomicWriteFile(target, 'new', { mode: 'preserve' });
+
+      expect(await modeOf(path.dirname(target))).toBe(await modeOf(control));
+    }
+  );
+
+  it('leaves no temp files behind', async () => {
+    const target = path.join(root, 'mcp.json');
+    await atomicWriteFile(target, 'done', { mode: 'preserve' });
+
+    expect(await fs.readdir(root)).toEqual(['mcp.json']);
+  });
+
+  it('writes through a symlink instead of replacing it', async () => {
+    // Dotfile setups symlink ~/.cursor/mcp.json into a tracked repo. A rename
+    // onto the link would swap it for a regular file and silently orphan the
+    // tracked copy.
+    const store = path.join(root, 'dotfiles', 'mcp.json');
+    await fs.mkdir(path.dirname(store), { recursive: true });
+    await fs.writeFile(store, 'old', 'utf8');
+    const link = path.join(root, 'mcp.json');
+    await fs.symlink(store, link);
+
+    await atomicWriteFile(link, 'new', { mode: 'preserve' });
+
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(store, 'utf8')).toBe('new');
+  });
+});
+
 describe('ensureDir', () => {
   let root: string;
 
@@ -171,4 +296,16 @@ describe('ensureDir', () => {
     const stat = await fs.stat(dir);
     expect(stat.isDirectory()).toBe(true);
   });
+
+  it.skipIf(isWindows)(
+    'with mode "preserve" does not tighten an existing directory',
+    async () => {
+      const dir = path.join(root, 'dot-cursor');
+      await fs.mkdir(dir, { mode: 0o755 });
+
+      await ensureDir(dir, { mode: 'preserve' });
+
+      expect(await modeOf(dir)).toBe(0o755);
+    }
+  );
 });

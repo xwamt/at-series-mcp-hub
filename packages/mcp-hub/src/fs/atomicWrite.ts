@@ -7,6 +7,19 @@ const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 
 /**
+ * `'preserve'` keeps whatever the target already has and falls back to the
+ * process umask when it does not exist yet. Use it for files we do not own —
+ * `~/.cursor/mcp.json` is the user's, and re-permissioning it on their behalf
+ * is a side effect they never asked for.
+ */
+export type AtomicWriteMode = number | 'preserve';
+
+export type AtomicWriteOptions = {
+  /** Defaults to 0600 for files, with 0700 on directories we create. */
+  mode?: AtomicWriteMode;
+};
+
+/**
  * Write via a temp file in the same directory, then rename. The temp file is
  * created with the final mode so the content never exists at a laxer
  * permission, not even briefly.
@@ -15,35 +28,61 @@ const DIR_MODE = 0o700;
  */
 export async function atomicWriteFile(
   filePath: string,
-  content: Buffer | string
+  content: Buffer | string,
+  options?: AtomicWriteOptions
 ): Promise<void> {
-  const dir = path.dirname(filePath);
-  await ensureDir(dir);
+  const requested = options?.mode ?? FILE_MODE;
+  const preserve = requested === 'preserve';
+  // Renaming onto a symlink replaces the link with a regular file, which for a
+  // config symlinked into a dotfiles repo silently orphans the tracked copy.
+  const target = await resolveLink(filePath);
+  await ensureDir(path.dirname(target), {
+    mode: preserve ? 'preserve' : DIR_MODE
+  });
+
+  const mode = preserve ? await currentMode(target) : requested;
 
   // pid + timestamp alone is not unique: concurrent writers in one process land
   // on the same millisecond, share a temp file and produce torn content.
   const tmpPath = path.join(
-    dir,
-    `.${path.basename(filePath)}.${process.pid}.${crypto
+    path.dirname(target),
+    `.${path.basename(target)}.${process.pid}.${crypto
       .randomBytes(8)
       .toString('hex')}.tmp`
   );
 
   try {
-    await fs.writeFile(tmpPath, content, { mode: FILE_MODE });
-    await tryChmod(tmpPath, FILE_MODE);
-    await fs.rename(tmpPath, filePath);
-    await tryChmod(filePath, FILE_MODE);
+    await fs.writeFile(tmpPath, content, mode === undefined ? {} : { mode });
+    if (mode !== undefined) {
+      await tryChmod(tmpPath, mode);
+    }
+    await fs.rename(tmpPath, target);
+    if (mode !== undefined) {
+      await tryChmod(target, mode);
+    }
   } catch (err) {
     await fs.rm(tmpPath, { force: true }).catch(() => undefined);
     throw err;
   }
 }
 
+export type EnsureDirOptions = {
+  /** `'preserve'` leaves existing directories alone and creates at the umask. */
+  mode?: number | 'preserve';
+};
+
 /** Create every missing level at 0700; `recursive` only applies mode to the leaf. */
-export async function ensureDir(dir: string): Promise<void> {
-  await fs.mkdir(dir, { recursive: true, mode: DIR_MODE });
-  await tryChmod(dir, DIR_MODE);
+export async function ensureDir(
+  dir: string,
+  options?: EnsureDirOptions
+): Promise<void> {
+  const mode = options?.mode ?? DIR_MODE;
+  if (mode === 'preserve') {
+    await fs.mkdir(dir, { recursive: true });
+    return;
+  }
+  await fs.mkdir(dir, { recursive: true, mode });
+  await tryChmod(dir, mode);
 }
 
 export async function tryChmod(target: string, mode: number): Promise<void> {
@@ -51,5 +90,23 @@ export async function tryChmod(target: string, mode: number): Promise<void> {
     await fs.chmod(target, mode);
   } catch {
     // Windows and some filesystems: best-effort.
+  }
+}
+
+/** `undefined` when the file does not exist yet, meaning "use the umask". */
+async function currentMode(filePath: string): Promise<number | undefined> {
+  try {
+    return (await fs.stat(filePath)).mode & 0o777;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Falls back to the given path when it does not exist or cannot be resolved. */
+async function resolveLink(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch {
+    return filePath;
   }
 }
