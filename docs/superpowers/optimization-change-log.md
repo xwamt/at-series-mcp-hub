@@ -132,3 +132,29 @@
 
 **顺带发现（记录不处理）：** `npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `dist/hub.js`（786 KB）还大，随包分发到三个插件。属审计的 P2-6，留待阶段 2 处理，不阻塞 0.2.2。
 
+### 2026-08-13 · P0-T5 · 补 .gitignore 缺口并清理已跟踪的 bridge 测试残留
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series、at-grafana-series |
+| 动机 | J16：4 个 `.tmp-jumpserver-bridge-*/.at-jumpserver-terminal/mcp-bridge.json` 被误提交进版本库——该文件按 Bridge 协议是 0600 的含 token 握手文件，不该进版本控制；at-grafana-series 缺 `.ssh-terminal-manager/` 忽略规则，而 at-terminal-series 的 SFTP 编辑功能会把远程文件明文副本落进其工作树，构成泄漏面 |
+| 代码 diff | 无源码改动。`at-jumpserver-series/.gitignore` **+3**（`.worktrees/` 之后插入 `.tmp-*/`、`.agents/`、`.ssh-terminal-manager/`），并 `git rm -r --cached` 4 个 `.tmp-jumpserver-bridge-{client,client-error,discovery-invalid,discovery-read}` 目录（**-19 行**，磁盘文件全部保留）；`at-grafana-series/.gitignore` **+1**（`.tmp-*/` 之后插入 `.ssh-terminal-manager/`） |
+| 契约影响 | 否 |
+| 文档 diff | 无 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及（纯仓库配置，不触及代码与协议） |
+| 验证 | **凭据风险排除（移除前先读内容）：** `git show HEAD:<f>` 逐一读出 4 个 `mcp-bridge.json`，token 依次为 `"token-1"`、`"token-2"`、`""`、`"secret"`，port 为 `34567`/`34568`/`0`/`39451`，pid 为 `111`/`111`/`"bad"`/`123`——全部是测试占位值，无 32 位以上十六进制或 base64 高熵串，**不需要凭据轮换**。**jumpserver：** `git ls-files \| grep -c '^\.tmp-'` = **0**；`git check-ignore -v` 对 4 个目录及嵌套文件 `.tmp-jumpserver-bridge-client/.at-jumpserver-terminal/mcp-bridge.json` 均命中 `.gitignore:21:.tmp-*/`，`.agents` 命中 `.gitignore:22:.agents/`，`.ssh-terminal-manager/` 命中 `.gitignore:23:.ssh-terminal-manager/`；4 个目录的 `mcp-bridge.json` 经确认仍在磁盘上。**grafana：** `.ssh-terminal-manager` 命中 `.gitignore:23:.ssh-terminal-manager/`；磁盘残留 `.ssh-terminal-manager/sftp-edit/af238298-adfa-4948-9aad-fa96e5aa17c3/{def643d13558fe96,63b57d2b54d57aae}`（空目录，git 不可见）。**提交范围：** `git show --stat HEAD` jumpserver 为 `5 files changed, 3 insertions(+), 19 deletions(-)`（`.gitignore` + 4 个删除），grafana 为 `1 file changed, 1 insertion(+)`；jumpserver 的 `package.json` / `package-lock.json` / `test/mcp/p0c.functional.e2e.test.ts` 提交后仍为未暂存的 ` M`，未被夹带 |
+| 提交 | at-jumpserver-series `6e33692`、at-grafana-series `d6eee89`（均在分支 `chore/at-series-optimization-phase0`，未推送远程） |
+
+**修正 Task 5 的前提假设：`.ssh-terminal-manager/` 其实四个仓库全都没有。** 计划原文认为「只有 grafana 缺，另外三个已有」，该结论来自 `git check-ignore -v .ssh-terminal-manager/` 的输出，而这个输出在三个仓库里是**假阳性**：`at-terminal-series`、`at-jumpserver-series`、`at-series-mcp-hub` 的 `.gitignore` 在工作区是 CRLF 换行，git 解析忽略文件时先判定「本行非空」再剥掉行尾 `\r`，于是每个空行都变成一条**空模式**，而空模式会匹配任何**带尾斜杠**的查询路径。对照实验：`git check-ignore -v zzz-definitely-not-ignored-xyz/` 在这三个仓库同样返回「已忽略」（命中 terminal-series `.gitignore:51`、jumpserver `:52`、hub `:24`，模式字段为空），去掉尾斜杠后立即返回未忽略；`grep -n 'ssh-terminal-manager' <repo>/.gitignore` 在**四个仓库全部无匹配**。
+
+该缺陷的实际影响面有限：`git status` / `git add` 的目录遍历不受影响（untracked 目录仍正常显示为 `??`），**只有 `git check-ignore` 加尾斜杠查询会说谎**。因此它不构成文件泄漏或文件被误藏，但会让任何以 `check-ignore <path>/` 形式做的忽略验证得出错误结论——本条目的验证一律改用**不带尾斜杠**的查询形式。
+
+**由此产生的两项待办（本任务未处理，需单独裁决）：**
+
+- `at-terminal-series` 与 `at-series-mcp-hub` 的 `.gitignore` **确实缺** `.ssh-terminal-manager/` 规则，需补。本任务按约束只改 jumpserver 与 grafana 两仓，未越界。
+- 三仓 `.gitignore` 的 CRLF 需归一到 LF 以消除空模式。其中 `at-series-mcp-hub` 的 CRLF **已提交进索引**（`git show HEAD:.gitignore` 含 24 个 `\r`），terminal-series 与 jumpserver 只是工作区 CRLF、索引已是 LF（P0-T1 的 `.gitattributes` `* text=auto eol=lf` 生效）。修复 hub 那份需要真实改动 blob，与「本轮不做 renormalize」的约定冲突，留待后续阶段。
+
+**遗留根因（本任务只做止血，未修）：** `at-terminal-series/src/sftp/SftpEditSessionManager.ts:74` 把 SFTP「编辑远程文件」的暂存目录放在**当前工作区根目录**下的 `.ssh-terminal-manager/`，而非扩展的 `globalStorageUri`。后果是：开发者把任意仓库当工作区打开并编辑远程文件时，服务器上的文件明文副本会直接落进那个仓库的工作树——grafana 仓里的空 `sftp-edit` 目录就是这么来的。本任务只给 grafana 补了忽略规则，属止血；把暂存目录迁到 `globalStorageUri` 的根因修复留待后续阶段。
+
