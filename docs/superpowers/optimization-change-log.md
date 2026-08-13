@@ -804,3 +804,104 @@ AssertionError: expected { …(2) } to deeply equal { secondWrite: 'BLOCKED', pr
 **为什么开 `keepNames`。** 压缩会把函数名改成单字母，而 P1-B 刚给 Hub 加的 stderr logger 是它在 IDE 里运行时**唯一**的诊断通道——如果栈帧全是 `a`/`b`/`c`，那个 logger 的价值会被大幅削弱。`keepNames` 保留 `Function.prototype.name`，用少量体积换回可读的栈。
 
 **为什么不是保留 sourcemap 而把它排除出 npm 包。** 那样会在 `hub.js` 末尾留下指向不存在文件的 `//# sourceMappingURL`（`at-grafana-series` 此刻正有同样的悬空引用问题，已交由并行任务处理）。既然 `copy-hub.mjs` 只复制 `hub.js`、map 在任何分发形态下都到不了调试器手里，直接不产出才是诚实的。
+
+### 2026-08-13 · P6-J · JumpServer 性能批次：输出缓冲 O(n²)、传输格式、超时、分页、重复拉取
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series |
+| 动机 | **J7（本仓最严重的性能缺陷）**：`TerminalOutputBuffer.collectUntil` 的 `onData` 每收到一个 PTY 帧就 `Buffer.concat` 整个滑动窗口再 `toString('utf8')` 全量解码，然后把解码结果交给 `isComplete`；`maxOutputBytes=64000` 时窗口是 326,144 字节，一次 `cat` 10 MB 的日志按 4 KB 分帧 = 2500 次全量重建 + 重解码。`append()` 同样每帧 `Buffer.concat` 一次 128 KB 常驻缓冲。**J8**：`TerminalPanel` 把每个 Buffer 摊成 `[...data]` 的数字数组过 `postMessage`，4 KB ASCII 帧因此变成 16,418 字节 JSON；webview 侧 `isByteArray` 再用 `.every()` 逐元素校验一遍才敢下笔；整条链路无任何批处理，KoKo 每来一帧穿透一次。**J6**：`request()` 无 `signal`、`defaultWebSocketFactory` 只等 `open`/`error`。JumpServer 完成 TCP 握手后不再应答（gunicorn 卡死、NAT 半开映射、容器被暂停）时，`listAssets` / `createConnectionToken` / `openKokoWebSocket` 永久 pending，UI 停在 "Opening KoKo terminal" 且无取消入口；MCP 侧一次 `jumpserver_list_assets` 可永久占住一个 worker。该 Promise settle 后也不摘另一个监听器。**J9**：`extension.ts:166` 硬编码 `limit: 200`，而 `ListPage` 声明的 `count` / `total` 全文件从未被读取——超过 200 台资产的账号（堡垒机常态）在树视图与 MCP 缓存里都只看得到前 200 台，且无任何提示。**J10**：`jumpserverManager.refresh` 先 `listAssetNodes()` 拉 `/nodes/all-with-assets/tree/`，紧接着 `listAssets()` 内部又 `safeListAssetTreePaths()` 命中同一 endpoint 第二次；`jumpserverManager.validate` 只想验证账号，却因为走 `listAssets({limit:1})` 而把整棵节点树拖了下来 |
+| 代码 diff | **J7（`2dda8d4`，3 文件 +331/-19）**：`src/agent/TerminalOutputBuffer.ts` **+148/-19**——新增文件内私有 `class SlidingByteWindow`（`buffer` / `start` / `end` / `dropped` 四个字段；`append` 用 `reserve()` 按需扩容或就地 `copy` 压实，逐出只推进 `start` 不复制；`indexOf(needle, fromOffset)` 在 `subarray(start,end)` 的活跃区上搜索并返回**绝对**流偏移；`toBuffer()` / `toString()` / `byteLength` / `droppedBytes` / `startOffset` / `endOffset`），`TerminalOutputBuffer.bytes` 与 `collectUntil` 的局部 `window` 双双改用它；`collectUntil` 新增 `scannedOffset` 与 `markerSeen` 两个游标，`onData` 先用 `window.indexOf(markerBytes, max(startOffset, scannedOffset - (markerLen-1)))` 做字节级门控，只有门控通过才 `toString()` 并调 `isComplete`；`CollectUntilOptions.marker` 的 JSDoc 补写该门控所依赖的契约。`test/agent/TerminalOutputBuffer.test.ts` **+108**（5 条跨帧/逐出/截断回归），新增 `test/agent/TerminalOutputBuffer.throughput.test.ts` **+94**（3 条基准）。**J8（`8e566b1`，4 文件 +223/-9）**：`src/webview/TerminalPanel.ts` **+57/-1**——新增 `OUTPUT_FLUSH_INTERVAL_MS = 8` / `OUTPUT_FLUSH_BYTES = 64 * 1024`、`pendingOutput` / `pendingOutputBytes` / `outputFlushTimer` 三个字段与 `queueOutput` / `flushOutput` / `sendToWebview` 三个私有方法；`postWebviewMessage` 改为「先 `flushOutput()` 再 `sendToWebview`」以锁定顺序；`onDidDispose` 清定时器与积压。`webview/terminal/output.ts` **+15/-4**——消息类型 `outputBytes: number[]` 改为 `outputBase64: string`，**删除** `isByteArray`，新增 `decodeBase64`（`atob` + 单趟 `charCodeAt` 填 `Uint8Array`）。`test/webview/TerminalPanel.test.ts` **+96/-2**（4 条新增 + 1 条既有线协议断言更新），新增 `test/webview/TerminalOutput.test.ts` **+64**（5 条）。**J6（`d2a3a53`，4 文件 +279/-15）**：`src/jumpserver/JumpServerClient.ts` **+118/-14**——新增导出 `JumpServerTimeouts` 与 `DEFAULT_JUMPSERVER_TIMEOUTS`（`requestMs: 15_000` / `listingMs: 60_000` / `webSocketMs: 15_000`），构造器增第三参 `timeouts: Partial<JumpServerTimeouts> = {}`；新增模块级 `withDeadline(run, timeoutMs)`（`AbortController` + `Promise.race`）；`request()` 与 `authenticatedRequest()` 各增 `timeoutMs` 形参，两个批量列表 endpoint 显式传 `listingMs`；`defaultWebSocketFactory` 增第三参 `timeoutMs`、返回类型由 `Promise<KokoWebSocket>` 收窄为 `Promise<WebSocket>`、新增 `settle()` 摘监听器并装无操作 error sink、超时走 `socket.terminate()`；新增私有 `timedWebSocketFactory()` 把客户端配置的超时喂给默认工厂。`src/jumpserver/restTransport.ts` **+32/-3**——`sendRequest` 尊重 `init.signal`（已 abort 立即 reject；否则挂 `abort` 监听器 `request.destroy()`，settle 时摘除），新增 `abortError(signal)`。测试 `+106` / `+38`。**J10（`6aafe3d`，4 文件 +106/-7）**：`src/jumpserver/JumpServerClient.ts` **+18/-2**——`listAssets` 入参增 `treePaths?: AssetPathMap`，新增导出 `assetPathsFromNodes(nodes)` 与 `getUserProfile()`。`src/extension.ts` **+5/-2**——`refresh` 把刚取到的 nodes 换算成 treePaths 注入；`validate` 由 `listAssets({limit:1})` 改为 `getUserProfile()`。测试 `+53` / `+35`。**J9（`e4bc185`，4 文件 +340/-25）**：`src/jumpserver/JumpServerClient.ts` **+159/-24**——新增导出 `JumpServerAssetInventory`、`ASSET_PAGE_SIZE = 200`、`MAX_SYNCED_ASSETS = 10_000`、`ASSET_PAGE_CONCURRENCY = 4` 与 `listAllAssets({pageSize, maxAssets, concurrency, treePaths})`；抽出私有 `fetchAssetPage(limit, offset)` 与 `toAssets(records, treePaths)`（`listAssets` 改调它们，**`any` 净增为零**：那行 `Record<string, any>` 的 type predicate 是移动而非复制）；新增模块级 `listPageRecords` / `listPageTotal` / `dedupeAssetsById` / `boundedCount`。`src/extension.ts` **+10/-2**——`refresh` 改调 `listAllAssets`，通知按 `truncated` 分两种文案，截断时用 `'warning'`。测试 `+146` / `+48` |
+| 契约影响 | **否（不触及 Hub 契约）**。`git diff --stat 2dda8d4~1 HEAD -- src/mcp/` **输出为空**——`toolCatalog.ts` / `BridgeServer.ts` / `bridgeSchemas.ts` / `McpConfigInstaller.ts` / `hubSync.ts` 一个字节未动；`src/agent/JumpServerAgentToolService.ts` 的 diff 行数为 **0**。15 个工具的名称、`risk` 分级、`inputSchema` 逐字未变，Bridge 线协议未动，registry 记录形状未动。**`toolCatalog.ts` 的 description 本次刻意未改，理由见下方专段**——J9 改的是缓存的完整度，不是工具的返回上限，而现有描述（"default limit 200, hard max 500… When truncated is true, page with offset"）在改动前后同样准确。**一处插件自有行为变化如实记录**：`jumpserver_list_assets` 返回体里的 `total` 现在是账号可见资产的真实总数（此前恒 ≤ 200），`truncated` 因此更常为 `true`。**单次响应的资产条数没有任何变化**（仍是 `min(limit, 剩余)`，默认 200、硬顶 500） |
+| 文档 diff | 无 Hub 契约文档改动（契约影响为否）。插件本仓文档本次未改：三处 README / features / SKILL 对 `jumpserver_list_assets` 的表述都是「列出已缓存资产、支持 search 与分页」，在缓存变完整之后依然准确，无需跟改（已逐份核对）。取舍与理由密集写在代码 JSDoc（`SlidingByteWindow` 的「为什么逐出只推进索引」、`CollectUntilOptions.marker` 的门控契约、`OUTPUT_FLUSH_*` 的「为什么是一个显示帧」、`DEFAULT_JUMPSERVER_TIMEOUTS` 的三档动机、`MAX_SYNCED_ASSETS` 的「这是防失控不是支持规模」）与五条提交信息正文中 |
+| protocolVersion | 不变（Bridge 1 / Hub 2）。本仓是插件侧，未参与协议版本 |
+| 插件需跟改 | **否**（本条即插件侧改动）。**但 J8 制造了一处跨仓分叉，必须在抽共享包时对账**：`webview/terminal/output.ts` 此前与 `at-terminal-series/webview/terminal/output.ts` **逐字节相同**，本次只改了本仓副本。两仓现在的差异是：本仓消息类型为 `outputBase64: string` 且无 `isByteArray`，terminal 仓仍是 `outputBytes: number[]` 且保留逐元素校验。**抽包时不能简单取任一份**——线协议是宿主与 webview 成对约定的，terminal 仓的 `TerminalPanel` 等价物必须同步改成 base64 + 合批，否则共享模块会与它的宿主对不上。J7 的 `TerminalOutputBuffer` 与 J6 的超时形状同样可能对另两仓适用，但未在本任务中排查 |
+| 核心不变量 | 已核对 **INV-1..INV-6 未被破坏**。**INV-1**（IDE 的 MCP 配置只能有一条 `AT Series`）：五个 commit 的 13 个文件中不含 `src/mcp/McpConfigInstaller*` 或任何调用点，`src/mcp/` 整体零 diff。**INV-2**（不得恢复 per-plugin 入口 / `languageModelTools`）：`rg 'languageModelTools\|mcpServers' src/ package.json` **0 匹配**（退出码 1），与改动前一致；`package.json` 全程未动。**INV-3**（Hub 内不写死插件工具清单）：本次在 hub 仓只追加本条台账，`packages/**` 零改动；工具清单仍全部由本插件的 `GET /tools` 提供。**INV-4**（`AT_SERIES_TOOL_DISCOVERY` 默认 `auto`、阈值 `20`）：未触碰，本仓不写这两个值；**工具数量仍是 15，未增未减**，故渐进暴露的阈值判定行为逐字不变。**INV-5 与 INV-4 的交叉点是本任务最需要小心的地方，单列一段在下方**——结论是 J9 只让缓存变完整，Agent 单次拿到的数据量上限一字未改，方向与「按需激活、避免提示词泛滥」一致而非相悖。**INV-6**（五个 Hub 元工具始终暴露、`risk: read`、在 autoApprove 内）：元工具是 Hub 内建，本仓无从触碰；本插件 15 个工具的 `risk` 分级逐字未变，故 installer 计算出的 autoApprove 集合不变（`test/mcp/McpConfigInstaller.test.ts` 仍在守） |
+| 验证 | **五个缺陷全部先红后绿，RED 原文即缺陷证据，详见下方各专段。** **typecheck：** `npm run typecheck` 退出码 0、**零诊断**（沙箱内外各一次）。**测试（沙箱外，`required_permissions: ["all"]`）：** `Test Files 39 passed (39)` / `Tests 301 passed (301)`，基线 261，净增 **40** 条。**测试（沙箱内）：** `Test Files 2 failed \| 37 passed (39)` / `Tests 4 failed \| 297 passed (301)`，4 条失败全部是 `EPERM: operation not permitted, mkdir '/var/folders/…/.cursor'`（`test/mcp/McpConfigInstaller.test.ts` 3 条 + `test/mcp/p0c.functional.e2e.test.ts` 1 条），与 P0-T3a / P1-B / P2-C / P3-G / P3-J 记录的同源沙箱限制，沙箱外全部消失，已实测确认。**类型纪律：** `rg '\bany\b' src/ \| wc -l` = **14**，与任务开始时逐行相同（`JumpServerSession.ts` 3 处 / `JumpServerClient.ts` 8 处 / `JumpServerSftpSession.ts` 3 处，全部是 JumpServer API 响应边界的 `Record<string, any>`）。中途一度读到 15，排查后确认多出的那处是 J6 注释里的英文单词 "any"（`…rejecting a promise nobody is waiting on any more`），已改写措辞让机械计数保持 14，避免下一个审计者误报。新增代码未用 `@ts-ignore` / `@ts-expect-error` / `as unknown as` / `as never`。`ReadLints` 对 `src/` `webview/` `test/` 三个目录返回 **No linter errors found** |
+| 提交 | `2dda8d4`（J7 增量窗口扫描，3 文件）、`8e566b1`（J8 base64 + 合批，4 文件）、`d2a3a53`（J6 超时，4 文件）、`6aafe3d`（J10 节点树复用，4 文件）、`e4bc185`（J9 全量分页，4 文件），另本条台账写入 hub 仓 1 条。均在分支 `chore/at-series-optimization-phase0`，**`git add` 与 `git commit` 两侧全部带 pathspec**，每次提交后以 `git show --stat` 复核文件数（3 / 4 / 4 / 4 / 4，与预期逐一相符）。未推送远程，未改 `package.json` / `package-lock.json`（两者全程保持他人留下的未暂存 ` M` 状态） |
+
+**J7 的 RED 不是"慢"，是"根本没跑完"。** 基准用真实的 `ShellTerminalExecutor` 而不是自己拼的钩子，因为真实钩子比 `text.includes(marker)` 重得多（`text.indexOf(startMarker)` 之后还有 `text.slice(start)` 与一次正则）。第一次 RED 直接撞上 vitest 的 5s 上限：
+
+```
+Error: Test timed out in 5000ms.
+ ❯ test/agent/TerminalOutputBuffer.throughput.test.ts:18:3
+```
+
+把 `it` 的超时放宽到 120s 后拿到可读数字。三条基准修复前后（同机连续两次，取沙箱外）：
+
+| 基准 | 修复前 | 修复后 | 倍数 |
+|---|---|---|---|
+| `collectUntil`（默认钩子），2500×4 KB | **121.7ms** | **3.0ms** | 41× |
+| `ShellTerminalExecutor` 双钩子路径，2500×4 KB | **116.4ms** | **1.9ms** | 61× |
+| `append` 进 128 KB 常驻缓冲，2500×4 KB | **17.3ms** | **0.5ms** | 35× |
+
+这三个数字是**扩展宿主主线程被独占的时间**——它们不是后台工作，期间 UI 事件、其它 webview 消息、其它 MCP 调用全部排队。分配量的下降比耗时更能说明问题：旧实现每帧产生一个 ~326 KB 的新 Buffer 加一个 ~326 KB 的新字符串，2500 帧约 1.6 GB 垃圾；新实现的后备存储稳定在 512 KB（`maxBytes` 的两倍，由几何扩容一次到位），此后只有 memcpy，且压实每 ~192 KB 追加才发生一次。
+
+**J7 是怎么保证 marker 跨帧仍然正确的——三层，每层都被变异验证过。** 门控只是"要不要解码"的判据，判完之后**交给 `isComplete` 的仍然是整个窗口的完整解码文本**，双钩子语义因此逐字未变。
+
+1. **重叠回退。** 每帧的搜索起点是 `max(window.startOffset, scannedOffset - (markerLen - 1))`，其中 `scannedOffset` 是上一帧结束时的绝对流偏移。任何跨越帧边界的 marker，其起点必然 ≥ 该值，因此不会被跳过；归纳下来所有位置恰好被扫描一次。
+2. **`markerSeen` 是**只置不清**的闩锁。** 这一层不是冗余：`__JMS_CMD_END_<id>__` 到达的那一帧，退出码 `0\n` 可能还在下一帧里，此时 `isComplete` 返回 false。若门控每帧重算，marker 只在到达那一帧"可见"，之后就再也不会解码，收集将永远挂到超时。闩锁一旦置位，后续每帧都照旧全量解码，行为与旧实现完全一致，**最坏情况不比改动前差**。
+3. **窗口逐出后自动失效。** 闩锁不清，但 marker 被滑出窗口后 `isComplete` 自然返回 false（解码文本里已经没有它了），不会产生假阳性。
+
+**变异验证（两次，都确有鉴别力）：** 把重叠回退改成 `scannedOffset`（去掉 `- (markerLen - 1)`），`detects a marker delivered one byte per chunk` 立刻转红；把 `if (!markerSeen)` 去掉让闩锁每帧重算，`waits for the exit code even when the end marker already landed in an earlier chunk` 立刻转红。两次变异都同时被下面的差分工具捕获，随后恢复。
+
+**J7 用一次性差分工具做了逐字节等价证明，而不是只靠新写的用例。** `git show HEAD:src/agent/TerminalOutputBuffer.ts` 抽出改动前的实现到临时目录，同一组场景分别喂给新旧两份，`expect(next).toEqual(previous)` 比较**完整的** `CollectedTerminalOutput`（`output` / `terminator` / `timedOut` / `truncated`）加 `buffer.text()`。13 个手写场景（逐字节投喂、marker 跨两帧且退出码更晚、echo 先于真终止符、窗口反复逐出、marker 被逐出、恰好等于 `maxOutputBytes`、多字节 UTF-8 跨窗口边界、单帧大于整个窗口、shell 双钩子的窗口内与窗口外两种、空帧交错等）加 **60 组伪随机切分**（同一段含 marker 的正文按 1–7 字节的伪随机长度切开）**全部逐字段相同**。另有一条走**真实** `ShellTerminalExecutor` 的差分，把新旧缓冲分别注入执行器再比较整个结果对象。取证后临时目录已删除，`.gitignore` 的 `.tmp-*/` 本就覆盖它，`git status` 确认无残留。
+
+**J7 顺带确认了一条既有语义，它看起来像缺陷但本次刻意不动。** 输出超过滑动窗口时，`__JMS_CMD_START_<id>__` 会被逐出，而双钩子契约要求"先看到 start marker"，于是**该次收集再也无法提前完成，只能等满超时并返回 `timedOut: true`、`terminator: undefined`**。即一次 `cat` 大文件的 `jumpserver_run_terminal_command` 会阻塞满 30s 默认超时。这不是本次引入的（差分工具里 `shell double hook, output exceeds window` 场景新旧行为逐字相同），修它必须改动双钩子语义，而任务书明确要求保持不变，故如实记录为后续项。基准里的 `expect(result.timedOut).toBe(true)` 就是把这条既有语义钉住的断言。**一处诚实的更正**：该场景下 `exitCode` 实测为 `0` 而非 `null`——因为窗口尾部残留的 `__JMS_CMD_END_<id>__0` 落在了被返回的 output 里，`parseExitCode` 从 output 兜底解析到了它。这同样是既有行为（已用差分工具对新旧实现实测确认 `prev=0 next=0`），基准里最初写的 `toBeNull()` 是我的臆测，已按实测改正而非放宽。
+
+**J8 的体积与帧数收益（实测，非估算）。** 用一段脚本对同一份 4 KB 帧分别按两种线格式 `JSON.stringify` 后取 `.length`：
+
+| 载荷 | `outputBytes`（旧） | `outputBase64`（新） | 缩小 |
+|---|---|---|---|
+| 4 KiB ASCII 帧 | 16,418 B（**4.01×** 膨胀） | 5,500 B（**1.34×** 膨胀） | 2.99× |
+| 4 KiB 二进制帧 | 14,658 B（3.58× 膨胀） | 5,500 B（1.34× 膨胀） | 2.67× |
+| 一次 10 MiB `cat` | **2500 条消息 / 34.9 MiB JSON** | **157 条消息 / 13.1 MiB JSON** | 消息数 16×，字节 2.7× |
+
+"掉帧"对应的是那 2500 次 postMessage 往返——每一次都是一趟结构化克隆加一次 webview 侧的 JSON 解析，而 xterm.js 每收到一次 `write` 就要安排一次渲染。**16 倍的消息数下降是这条里对流畅度贡献最大的一项**，比字节数更直接。消息数由 64 KiB 阈值决定（10 MiB ÷ 64 KiB ≈ 157），8ms 定时器只在数据稀疏时兜底，因此交互式打字仍是一帧一送、无可感延迟。committed 用例 `collapses a 10 MB burst into far fewer webview messages than PTY frames` 同时断言消息数 ≤ 200 **和** 解 base64 后的总字节精确等于 2500×4096，即批处理没有丢字节。
+
+**J8 改了一条既有测试，这是刻意的线协议变更而不是为了让测试通过。** `posts upstream bytes to the terminal webview` 原本断言 `{ type: 'outputBytes', payload: [...rawOutput] }`——它锁定的正是被本条替换掉的那个线格式，因此必须随之更新（已改名为 `…as base64` 并断言新形状 + 等待合批窗口）。**这是本批次唯一一处修改既有断言**；J7 的 `TerminalExecutors` 与 `TerminalOutputBuffer` 既有用例、J6/J9/J10 的既有用例全部保持原样通过。顺带确认一处容易被忽略的顺序风险并用例锁定：合批会让"断开连接"通知抢在它本应跟随的输出**之前**到达终端，故 `postWebviewMessage` 改为先 `flushOutput()` 再发送，`flushes buffered output before a later status message so the terminal stays ordered` 断言两条消息的先后。另外 `terminalContext.appendOutput` 保持**逐帧同步**投喂、不进合批队列，因为 MCP 的 marker 检测读的就是它——合批会给每次 `jumpserver_run_terminal_command` 平添最多 8ms 延迟。
+
+**J6 的三档超时值与依据。** 任务书建议统一 15s 并提示"SFTP 传输类请求可能需要更长"。先核实了这条提示：**SFTP 的数据传输走 KoKo WebSocket（`openKokoSftpWebSocket`），不经过 `request()`**，`src/sftp/JumpServerSftpSession.ts` 的读写全部是 WS 帧，因此没有任何传输落在 15s 预算下。真正需要更长预算的是另一类——批量权限列表。
+
+| 预算 | 值 | 覆盖 | 依据 |
+|---|---|---|---|
+| `requestMs` | 15s | `/authentication/auth/`、`/authentication/connection-token/`、`/terminal/endpoints/smart/`、`/users/profile/`、`/perms/users/self/assets/<id>/`、KoKo warmup 的全部跳转 | 都是单次查表或单行读取，JumpServer 正常在数百毫秒内应答；15s 已是两个数量级的余量，再长只会延长用户对着转圈的时间 |
+| `listingMs` | 60s | `/perms/users/self/assets/`、`/perms/users/self/nodes/all-with-assets/tree/` | 这两个要在服务端展开整棵授权树，节点数千的堡垒机确实要几十秒。给它们 15s 会把"慢"误判成"死"，制造一个改动前不存在的失败 |
+| `webSocketMs` | 15s | KoKo `wss://…/koko/ws/terminal/` 与 `…/koko/ws/sftp/` 的握手 | 一次 TCP + TLS + HTTP Upgrade 往返；注意它是在 `warmupKokoConnectPage`（若干次 REST，各自 ≤15s）**之后**才开始计时的，不是端到端预算 |
+
+**J6 的超时放在客户端而不是 transport，同时两层都做——这不是重复。** 策略（多久）属于 `JumpServerClient`，机制（怎么中断）属于 `restTransport`：客户端造 `AbortSignal` 塞进 `init.signal`，transport 收到 abort 就 `request.destroy()`，**socket 因此被真正拆掉而不是留给 GC**（用例 `aborts an in-flight request when the caller signal fires` 会等服务端观察到 socket close 才算通过）。客户端**同时**保留 `Promise.race`，因为 `fetchImpl` 是既有的注入点：一个忽略 signal 的自定义 transport 不能有能力把调用方钉死。两层的关系是"abort 释放资源、race 保证 settle"，缺任一层都有真实缺口。**超时文案刻意不含 URL**——`getSmartEndpoint` / `buildKokoConnectUrl` 的 URL 里带 `token=`，`keeps the JumpServer URL out of the timeout message so tokens cannot leak` 用 `/^JumpServer request timed out after 20ms\.$/` 的**全匹配**正则钉住这一点。
+
+**J6 摘监听器的同时必须装一个无操作 error sink，否则会把扩展宿主打崩。** 直接按任务书"settle 后 `removeListener`"实现，`gives up on a KoKo handshake that never completes` 立刻抛出**未捕获异常**：
+
+```
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+Error: WebSocket was closed before the connection was established
+ ❯ WebSocket.terminate node_modules/ws/lib/websocket.js:496:7
+ ❯ src/jumpserver/JumpServerClient.ts:373:14
+```
+
+根因是 EventEmitter 的 `'error'` 语义：没有监听器时 `emit('error')` 会**抛**。旧代码的 `socket.once('error', reject)` 一直挂着，无意中充当了 sink；把它摘掉就露出了这个洞，而超时路径的 `terminate()` 恰恰会触发一次 `'error'`。故 `settle()` 摘掉两个握手监听器之后立即 `socket.on('error', () => undefined)`。这不是吞错误——`JumpServerSession` / `JumpServerSftpSession` 随后各自挂的 `'error'` 处理器照常收到事件，sink 只保证 emitter 不抛。用例相应改为断言 `listenerCount('open') === 0` 加 `expect(() => socket.emit('error', …)).not.toThrow()`，比断言 `listenerCount('error') === 0` 更贴近这条修复真正要买的东西。
+
+**J9 是怎么在"树视图取全量"与"不放宽 Agent 返回上限"之间划线的——这是本任务最需要小心的一处。** 两者之所以能分开，是因为它们本来就在**两个不同的数据结构**上：
+
+- **`JumpServerClient.listAllAssets`（本次新增）** 面向 `globalState` 缓存与树视图，目标是"缓存必须完整"。上限是 `MAX_SYNCED_ASSETS = 10_000`，它是**防失控的护栏**（防止畸形 `count` 让扩展无限翻页），不是"支持 10000 台"的承诺。
+- **`JumpServerAgentToolService.listAssets`（本次零改动）** 面向 MCP，读的是缓存，套的是它自己的 `DEFAULT_LIST_ASSETS_LIMIT = 200` / `MAX_LIST_ASSETS_LIMIT = 500`。`git diff 2dda8d4~1 HEAD -- src/agent/JumpServerAgentToolService.ts` 的**输出行数为 0**，这两个常量一个字符没动。
+
+于是 Agent 单次调用拿到的资产条数**上限完全没变**（仍是 `min(limit, 剩余)`，默认 200、硬顶 500）。变的只有两个字段的诚实度：`total` 从"≤200 的假数"变成真实总数，`truncated` 因此更常为 `true`。**这个方向与 INV-4/INV-5 一致而非相悖**：`truncated` 为真正是既有描述让 Agent 翻页而不是一次性倾倒缓存的触发条件，此前它因为缓存本身就是残缺的而**假性为 false**——Agent 会以为自己看到了全部，从而做出错误判断。修完之后 Agent 反而更清楚"还有更多、请带 offset 或 search 再来"。**`toolCatalog.ts` 的 description 因此无需修改**（现有措辞 "default limit 200, hard max 500… When truncated is true, page with offset instead of dumping the full cache" 在改动前后同样准确），这也是"契约影响 = 否"能够成立的原因；本条同时确认了工具**数量仍是 15**，故 INV-4 的阈值 20 的判定行为逐字不变。
+
+**J9 的三道防线，都是针对"服务端答复不可信"而不是"资产很多"。** ① `count` 只用来**规划**偏移量集合（`for (offset = pageSize; offset < min(count, maxAssets); offset += pageSize)`），不用来做循环条件，因此一个荒谬的 `count: 100_000` 只会被 `maxAssets` 截断，不会变成无限循环（用例 `does not loop forever when a reported page comes back empty` 用 `count: 100_000` 加恒空页锁定）。② 服务端完全不给 `count`（返回裸数组）时退化为顺序步进，停止条件是"某一页短于 pageSize"或触顶 `maxAssets`——空页天然短于 pageSize，同样会停。③ 并发页可能在结果集移动时重复返回同一行，故按 asset id 去重（用例 `drops assets a shifting paginator handed back twice`）。并发上限 4：`fetches the remaining pages concurrently but within the configured cap` 同时断言峰值在途数 `> 1`（证明确实并发了）**和** `≤ 4`（证明有上限）——只断言上限的话，一个纯顺序实现也能通过。5000 台资产由 25 次串行往返变成约 7 批。
+
+**J9 的通知在被截断时改用 `'warning'`，因为"静默变短"正是本条要修的失败形态。** 完整时仍是原文案 `JumpServer assets refreshed: <n>`；触顶时是 `JumpServer assets refreshed: <n> of <total> (cache cap reached).` 并升级为警告级。若沿用普通通知，10000 与 24000 的差别在一闪而过的提示里几乎必然被忽略，那就等于用一个新的静默截断换掉了旧的静默截断。
+
+**J10 的 `listAssets` 重构一度改变了请求顺序，被既有测试当场抓住——这正是不该动既有测试的例子。** 把取树的代码上移到取页之前后，两条既有用例转红：
+
+```
+AssertionError: expected [] to have a length of 1 but got +0
+AssertionError: expected { id: 'node-default', …(9) } to match object { id: 'asset-1', …(2) }
+```
+
+它们用 `mockResolvedValueOnce` 按 `auth → assets → tree` 的顺序排响应，顺序一变就全部错位。**修法是把实现改回原顺序，而不是去改这两条用例**——请求顺序对 JumpServer 是可观察行为，本条要消除的是"多一次请求"，不是"换个顺序请求"。`listAllAssets` 是新方法、无既有约束，因此在那里让首页与节点树**并行**（并先 `await ensureAuthToken()`，避免两个并行分支各自判定 token 缺失而把凭据 POST 两遍），省掉一趟串行往返。
+
+**J10 的 `validate` 为什么是 `ensureAuthToken` + `/users/profile/` 而不是只留前者。** `ensureAuthToken` 只证明用户名密码能换到 token；`/api/v1/users/profile/` 走的是 `authenticatedRequest`，会把 `Authorization: Bearer` 与 `X-JMS-ORG` 一并送出，因此额外证明了 token 可用、组织 ID 有效。这恰好是"验证账号"这个动作应有的覆盖面，而代价是一次单行读取，而不是一整棵节点树。
+
+**并发协作说明：五次提交全部带 pathspec，未夹带他人在制品。** 严格执行 P2-C 台账 L484 与 P4-T 的教训——`git add` 与 `git commit` **两侧**都带明确路径列表，全程未用 `.` / `-A` / `-u`；每次提交后立即 `git show --stat HEAD` 复核文件数（3 / 4 / 4 / 4 / 4，与预期逐一相符）。`package.json` / `package-lock.json` 在整个过程中保持他人留下的未暂存 ` M` 状态，`docs/superpowers/plans/` 与 `specs/` 下 16 个未跟踪文件保持未跟踪。本条台账写入 hub 仓时同样带 pathspec——该仓当时有他人未提交的 `packages/mcp-hub/src/installer/cursor.ts` 等 3 个 `M` 与 4 个 `??` 在索引外，未被波及。**按 P4-T 记下的教训，追加前重新读取了本文件尾部**（首次读取时 654 行，落笔前为 806 行，期间他人追加了 P4-T / OPS-2 / P6-G / P6-H）。**顺带记录一处本条未触碰的既有异常**：追加时 L776–788 存在一个被截断的 P6-H 条目（`| 验证 | hub.js **791,874 → 390,267 字节（-50.7` 处断开），其下 L789 起是同一条目的完整版本。本条严格追加在文件末尾，未修改该区域，留给 P6-H 的作者处置。
