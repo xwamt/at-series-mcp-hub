@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import semver from 'semver';
 import { atomicWriteFile, ensureDir } from '../fs/atomicWrite';
+import { withFileLock } from '../fs/fileLock';
 import {
   AT_SERIES_HUB_PROTOCOL_VERSION,
   type HubVersionRecord
@@ -11,10 +12,6 @@ import {
 import { hubJsPath, hubVersionPath, mcpDir } from '../protocol/paths';
 
 const LOCK_FILENAME = '.hub-sync.lock';
-/** Beyond this the holder is presumed dead, otherwise one crash wedges every plugin. */
-const LOCK_STALE_MS = 30_000;
-const LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
-const LOCK_RETRY_MS = 20;
 
 export async function syncHubBundle(input: {
   version: string;
@@ -44,7 +41,7 @@ export async function syncHubBundle(input: {
   // milliseconds of each other when an IDE starts; without mutual exclusion
   // they all observe the same pre-election state and the last writer wins
   // regardless of semver, which is exactly what §8.6 forbids.
-  return withHubSyncLock(dir, async () => {
+  return withFileLock(path.join(dir, LOCK_FILENAME), async () => {
     const active = await readActiveVersion(targetMeta);
     // The election may only defer to the recorded metadata while that metadata
     // still describes the file the IDE actually executes. Skipping this check
@@ -84,97 +81,6 @@ export async function syncHubBundle(input: {
 
     return { updated: true, activeVersion: input.version };
   });
-}
-
-async function withHubSyncLock<T>(
-  dir: string,
-  run: () => Promise<T>
-): Promise<T> {
-  const lockPath = path.join(dir, LOCK_FILENAME);
-  await acquireLock(lockPath);
-  try {
-    return await run();
-  } finally {
-    await fs.rm(lockPath, { force: true }).catch(() => undefined);
-  }
-}
-
-async function acquireLock(lockPath: string): Promise<void> {
-  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
-  for (;;) {
-    try {
-      // 'wx' fails with EEXIST if the file is already there, and that check is
-      // atomic, which is what makes this usable across processes.
-      const handle = await fs.open(lockPath, 'wx', 0o600);
-      try {
-        await handle.writeFile(
-          JSON.stringify({ pid: process.pid, acquiredAt: Date.now() })
-        );
-      } finally {
-        await handle.close();
-      }
-      return;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw err;
-      }
-    }
-
-    if (await stealIfStale(lockPath)) {
-      continue;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `timed out after ${LOCK_ACQUIRE_TIMEOUT_MS}ms waiting for the hub sync lock at ${lockPath}`
-      );
-    }
-    await delay(LOCK_RETRY_MS);
-  }
-}
-
-/**
- * Renaming the lock away is the atomic part: whichever caller wins the rename
- * removes it, and everyone else sees ENOENT and loops back to a plain create.
- */
-async function stealIfStale(lockPath: string): Promise<boolean> {
-  const acquiredAt = await readLockAcquiredAt(lockPath);
-  if (acquiredAt !== undefined && Date.now() - acquiredAt <= LOCK_STALE_MS) {
-    return false;
-  }
-
-  const graveyard = `${lockPath}.${process.pid}.${crypto
-    .randomBytes(6)
-    .toString('hex')}.stale`;
-  try {
-    await fs.rename(lockPath, graveyard);
-  } catch {
-    return false;
-  }
-  await fs.rm(graveyard, { force: true }).catch(() => undefined);
-  return true;
-}
-
-/** `undefined` for a missing, unreadable or malformed lock, all of which are stale. */
-async function readLockAcquiredAt(
-  lockPath: string
-): Promise<number | undefined> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(lockPath, 'utf8'));
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return undefined;
-  }
-  const acquiredAt = (parsed as { acquiredAt?: unknown }).acquiredAt;
-  return typeof acquiredAt === 'number' && Number.isFinite(acquiredAt)
-    ? acquiredAt
-    : undefined;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** `undefined` when hub.js is absent, which can never equal a recorded hash. */
