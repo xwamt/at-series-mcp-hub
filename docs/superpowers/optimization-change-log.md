@@ -243,3 +243,32 @@
 - **多出一个 ` M docs/plans/2026-07-29-at-grafana-v1-implementation-plan.md`**，任务书未提及。核查后确认其 `git diff` **为空**，仅有 `warning: CRLF will be replaced by LF` ——是工作区 CRLF / 索引 LF 造成的 stat 假阳性，与 P0-T2b 中记录的 21 个同类假阳性同源，**无实际内容改动**，故未纳入本次提交。
 - **P0-T2b 的 L114 判定「terminal 的 `0.3.0.md` 链接改动随 Task 6 一并提交」未执行。** 本任务的约束明确限定只改 `at-grafana-series`（台账除外）、不得触碰其他仓库，两者冲突时以任务约束为准。`at-terminal-series/docs/releases/0.3.0.md`（ADR 相对链接改 GitHub 绝对 URL）**仍为未提交状态**，需另行安排归属。
 
+### 2026-08-13 · P0-T4 · 修复 jumpserver p0c e2e 测试的 4 个类型错误
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series |
+| 动机 | **J11**：P0-T3 收尾后 terminal（304/304）与 grafana（294/294）已 typecheck 干净，jumpserver 是三插件中唯一无法通过 `tsc --noEmit` 的仓，余 4 个错误全部集中在 `test/mcp/p0c.functional.e2e.test.ts` |
+| 代码 diff | `test/mcp/p0c.functional.e2e.test.ts` **+30/-10**（单文件）：`:10-14` 从 `@at-series/mcp-hub` 增补 `BridgeErrorBody` / `BridgeHealthResponse` / `BridgeInvokeSuccess` / `BridgeToolsResponse` 四个类型导入；`:49` 资产 fixture 补 `zoneName: 'default'`（插在 `type` 与 `nodePath` 之间，与 `cachedJumpServerAssetSchema` 字段序一致）；`:96`、`:106`、`:119`、`:126` 四处 `fetchJson` 调用补类型实参；`:108-110`、`:130-132` 两处新增 `isBridgeError` 收窄分支；`:214-231` `fetchJson` 改为泛型 `<T = unknown>` 并返回 `Promise<{ status: number; json: T \| BridgeErrorBody }>`，`as never` → `as T \| BridgeErrorBody`，新增 `isBridgeError` 类型守卫。**未触碰任何生产代码** |
+| 契约影响 | 否。未触及 AGENTS.md §2.1 的任何一项：无线协议字段增删、无 hub 导出面变化、无 installer / hub sync 行为变化（本条只消费 hub 已有的导出类型） |
+| 文档 diff | 无 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 **INV-1..INV-6 均未涉及**（改动范围为单个测试文件，`src/**` 零改动）：未触及 MCP 配置入口与 `~/.at-series/mcp/hub.js` 单条 server（INV-1/INV-2）、未触及 Hub 工具 registry 与 `GET /tools`（INV-3）、未触及 `AT_SERIES_TOOL_DISCOVERY` 默认值与渐进发现阈值（INV-4/INV-5）、未触及五个 Hub 元工具的暴露与 risk 分级（INV-6） |
+| 验证 | **typecheck：** 修复前 4 个错误（TS2741 `:38`、TS2339 `:101`/`:102`/`:120`）；修复后 `npm run typecheck` **退出码 0、零诊断输出**。**测试：** 沙箱内 `35 文件 / 224 用例` 中 6 失败，其中 4 个为 `EPERM: operation not permitted, mkdir '/var/folders/.../.cursor'`（沙箱禁止创建该名目录，与 P0-T3a 记录的同源）；**沙箱外复跑 222 通过 / 2 失败**，4 个 EPERM 全部消失。本任务目标文件 `test/mcp/p0c.functional.e2e.test.ts` 沙箱外 **`✓` 通过（105ms）**——测试真实跑完，证明 15 工具数量断言、目录名排序比对、`USER_CANCELLED` 断言均实际执行而非被类型层绕过。**提交范围：** `git show --stat HEAD` 为 `1 file changed, 30 insertions(+), 10 deletions(-)`；提交后 `package.json` / `package-lock.json` / `.gitignore` 仍为未暂存的 ` M`，未被夹带 |
+| 提交 | at-jumpserver-series `955046d`（分支 `chore/at-series-optimization-phase0`，未推送远程） |
+
+**归属判断结论：4 个错误全部是历史遗留，与本轮两条在制品均无关。** 三条依据：
+
+1. **该文件的未提交改动不可能致错。** `git diff` 确认工作区相对 HEAD 只改了第 27 行 `it(...)` 标题里的乱码字节（`e2 86 3f` → `ef bf bd 3f`，即 P0-T2b 的 L111 已记录、L114 判定「随 Task 4 处理」的那处编码噪声）。它是一个字符串字面量，与报错的第 38/101/102/120 行无类型关联。
+2. **TS2741 的必填字段早于测试文件存在。** `zoneName` 由 `4e81509`（`chore: import JumpServer snapshot for AT Series Hub adaptation`）引入 `src/config/schema.ts:28` 的 `cachedJumpServerAssetSchema`，而 `git merge-base --is-ancestor 4e81509 260236a` 确认它是测试文件引入提交 `260236a` 的**祖先**——fixture 从写下的第一天就缺这个必填字段。
+3. **3 个 TS2339 与 hub 依赖版本无关。** 根因在 `fetchJson` 里的 `as never`，同样出自 `260236a`，是纯本地代码，不随 `@at-series/mcp-hub` 由 npm `^0.2.1` 换成 `file:` 本地 0.2.2 而改变。
+
+**由此推出一个应当记录的事实：这个 e2e 测试自 `260236a` 合入起从未通过过 `tsc --noEmit`。** 它能长期潜伏，说明合入时既没有类型门禁、CI 也未对 `test/**` 做类型检查（`tsconfig.json` 的 `include` 明明覆盖了 `test`）。这正是阶段 0「恢复可验证性」要解决的问题本身，Task 8 的 CI 工作流须把 `npm run typecheck` 设为必过项，否则同类问题会再次沉底。
+
+**对任务前提的一处修正：** 任务书推测 3 个 TS2339 是「联合类型被穷尽判断收窄成 `never` 后仍继续访问」。实际根因不同——`fetchJson` 无条件把 `await res.json()` 断言成了 `never`，与任何控制流收窄无关。附带解释了一个反常现象：为什么 5 处读取 `.json` 只有 3 处报错——`never` 可赋值给任何类型，因此 `expect(health.json).toMatchObject(...)`、`expect(list.json).toMatchObject(...)` 这两处把整个 body 作为值传参的调用悄悄通过了，只有真正**取属性**的 3 处（`.tools` ×2、`.error`）才触发 TS2339。
+
+**修法选择（为什么用显式联合而非断言）：** 全程**未使用** `any` / `as any` / `@ts-expect-error` / `@ts-ignore`——该仓全项目仅 14 处 `any` 且都在 JumpServer API 响应边界，这条类型纪律予以保持。`fetchJson` 改为泛型并返回 `T | BridgeErrorBody`，复用 hub 的 `protocol/index` 已导出的四个线协议契约类型，未自造重复定义。HTTP 边界上把无类型的 `res.json()` 落到具体联合仍需一次断言（这是边界上不可消除的一次，任务书给出的参考写法同样如此），但**所有读取点一律走 `isBridgeError` 运行时守卫**而非用断言把联合抹平：这样 Bridge 若真返回错误体，测试会带着实际 error code 显式失败，而不是在 `undefined` 上抛 `TypeError`。断言意图零改动。顺带移除了 `:102` 上冗余的内联结构标注 `(t: { name: string })`——`BridgeToolsResponse.tools` 已是 `ToolCatalogEntry[]`，`t` 可正确推断。
+
+**顺带发现（未处理，不属本任务）：** 沙箱外仅剩的 2 个失败均在 `test/docs/JumpServerMcpDocs.test.ts`。该文件是 **untracked**（`git ls-files test/docs/` 输出为空），P0-T2b 的 L112 已记录它「6 月 2 日，断言 hub 化之前的 SKILL.md 文案」。两条断言分别要求 skill 含 `Do not read local VS Code secret storage`（现文案已改为 `Never read local IDE secret storage, cookies, or JumpServer tokens`）、README 含 `JumpServer: Install MCP Config`。属**文案漂移**而非代码缺陷，与本次类型修复无因果关系；需单独裁决是纳入版本控制并更新断言，还是废弃该文件。因其未跟踪，本次未纳入提交。
+
