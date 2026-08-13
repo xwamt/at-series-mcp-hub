@@ -78,6 +78,80 @@ describe('ensureAtSeriesMcpConfig (continue)', () => {
     expect(second).toEqual({ updated: false });
   });
 
+  it('keeps the legacy files when the new config cannot be written', async () => {
+    const dir = path.join(workspace, '.continue', 'mcpServers');
+    await fs.mkdir(dir, { recursive: true });
+    const legacy = path.join(dir, 'at-terminal.yaml');
+    await fs.writeFile(legacy, 'name: old\n', 'utf8');
+
+    // A directory where the config belongs makes the write fail deterministically.
+    await fs.mkdir(path.join(dir, 'at-series.yaml'), { recursive: true });
+
+    await expect(
+      ensureAtSeriesMcpConfig({
+        target: 'continue',
+        hostApp: 'continue',
+        hubJsAbsolutePath: hubJs,
+        workspaceFolder: workspace,
+        registryTools: []
+      })
+    ).rejects.toThrow();
+
+    // Removing the old entry before the replacement lands would leave the user
+    // with no AT Series config at all.
+    await expect(fs.access(legacy)).resolves.toBeUndefined();
+  });
+
+  it('backs the previous config up once before replacing it', async () => {
+    const dir = path.join(workspace, '.continue', 'mcpServers');
+    await fs.mkdir(dir, { recursive: true });
+    const target = path.join(dir, 'at-series.yaml');
+    await fs.writeFile(target, 'name: hand written\n', 'utf8');
+
+    await ensureAtSeriesMcpConfig({
+      target: 'continue',
+      hostApp: 'continue',
+      hubJsAbsolutePath: hubJs,
+      workspaceFolder: workspace,
+      registryTools: []
+    });
+
+    const backup = `${target}.at-series.bak`;
+    expect(await fs.readFile(backup, 'utf8')).toBe('name: hand written\n');
+
+    // A second pass must not overwrite the only copy that predates us.
+    await fs.writeFile(hubJs, 'module.exports = { changed: true };\n', 'utf8');
+    await ensureAtSeriesMcpConfig({
+      target: 'continue',
+      hostApp: 'continue',
+      hubJsAbsolutePath: path.join(workspace, 'hub2.js'),
+      workspaceFolder: workspace,
+      registryTools: []
+    });
+    expect(await fs.readFile(backup, 'utf8')).toBe('name: hand written\n');
+  });
+
+  it('serialises concurrent writers so no update is lost', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        ensureAtSeriesMcpConfig({
+          target: 'continue',
+          hostApp: 'continue',
+          hubJsAbsolutePath: hubJs,
+          workspaceFolder: workspace,
+          registryTools: []
+        })
+      )
+    );
+
+    // Exactly one writer sees a change; the rest observe the settled file.
+    expect(results.filter((r) => r.updated)).toHaveLength(1);
+
+    const target = path.join(workspace, '.continue', 'mcpServers', 'at-series.yaml');
+    const doc = yamlLoad(await fs.readFile(target, 'utf8')) as { name: string };
+    expect(doc.name).toBe(MCP_SERVER_DISPLAY_NAME);
+  });
+
   it('uninstall removes at-series.yaml only', async () => {
     const dir = path.join(workspace, '.continue', 'mcpServers');
     await fs.mkdir(dir, { recursive: true });

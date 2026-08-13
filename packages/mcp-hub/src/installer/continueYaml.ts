@@ -12,6 +12,8 @@ import {
   type AtSeriesMcpServerConfig
 } from './serverConfig';
 import { LEGACY_CONTINUE_YAML_FILENAMES } from './migrate';
+import { atomicWriteFile, backupFileOnce } from '../fs/atomicWrite';
+import { mcpConfigBackupPath, withMcpConfigLock } from './jsonConfigFile';
 
 export function continueMcpConfigPath(workspaceFolder: string): string {
   return path.join(workspaceFolder, '.continue', 'mcpServers', 'at-series.yaml');
@@ -77,13 +79,23 @@ function isSameContinueDoc(
   });
 }
 
-async function removeLegacyContinueYamls(dir: string): Promise<boolean> {
-  let removed = false;
+async function legacyContinueYamlsPresent(dir: string): Promise<boolean> {
+  for (const name of LEGACY_CONTINUE_YAML_FILENAMES) {
+    try {
+      await fs.access(path.join(dir, name));
+      return true;
+    } catch {
+      // Absent, which is the expected steady state.
+    }
+  }
+  return false;
+}
+
+async function removeLegacyContinueYamls(dir: string): Promise<void> {
   for (const name of LEGACY_CONTINUE_YAML_FILENAMES) {
     const p = path.join(dir, name);
     try {
       await fs.unlink(p);
-      removed = true;
     } catch (error) {
       const code =
         typeof error === 'object' && error !== null && 'code' in error
@@ -94,7 +106,6 @@ async function removeLegacyContinueYamls(dir: string): Promise<boolean> {
       }
     }
   }
-  return removed;
 }
 
 export async function ensureContinueMcpConfig(input: {
@@ -105,40 +116,49 @@ export async function ensureContinueMcpConfig(input: {
 }): Promise<{ updated: boolean }> {
   const target = continueMcpConfigPath(input.workspaceFolder);
   const dir = path.dirname(target);
-  await fs.mkdir(dir, { recursive: true });
 
-  const legacyRemoved = await removeLegacyContinueYamls(dir);
-  const desiredServer = buildAtSeriesMcpServerConfig({
-    hostApp: input.hostApp,
-    hubJsAbsolutePath: input.hubJsAbsolutePath,
-    registryTools: input.registryTools
-  });
-  const desiredDoc = buildContinueDoc(desiredServer);
+  return withMcpConfigLock(target, async () => {
+    const legacyPresent = await legacyContinueYamlsPresent(dir);
+    const desiredServer = buildAtSeriesMcpServerConfig({
+      hostApp: input.hostApp,
+      hubJsAbsolutePath: input.hubJsAbsolutePath,
+      registryTools: input.registryTools
+    });
+    const desiredDoc = buildContinueDoc(desiredServer);
 
-  let existingText: string | undefined;
-  try {
-    existingText = await fs.readFile(target, 'utf8');
-  } catch (error) {
-    const code =
-      typeof error === 'object' && error !== null && 'code' in error
-        ? String((error as { code: unknown }).code)
-        : '';
-    if (code !== 'ENOENT') {
-      throw error;
+    let existingText: string | undefined;
+    try {
+      existingText = await fs.readFile(target, 'utf8');
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      if (code !== 'ENOENT') {
+        throw error;
+      }
     }
-  }
 
-  const existingDoc = existingText ? parseContinueDoc(existingText) : undefined;
-  if (!legacyRemoved && isSameContinueDoc(existingDoc, desiredDoc)) {
-    return { updated: false };
-  }
+    const existingDoc = existingText ? parseContinueDoc(existingText) : undefined;
+    if (!legacyPresent && isSameContinueDoc(existingDoc, desiredDoc)) {
+      return { updated: false };
+    }
 
-  const text = yamlDump(desiredDoc, {
-    lineWidth: 120,
-    noRefs: true
+    const text = yamlDump(desiredDoc, {
+      lineWidth: 120,
+      noRefs: true
+    });
+
+    if (existingText !== undefined) {
+      await backupFileOnce(target, mcpConfigBackupPath(target));
+    }
+    await atomicWriteFile(target, text, { mode: 'preserve' });
+
+    // Only once the replacement is on disk. Unlinking first would leave the
+    // user with neither config if the write then failed.
+    await removeLegacyContinueYamls(dir);
+    return { updated: true };
   });
-  await fs.writeFile(target, text, 'utf8');
-  return { updated: true };
 }
 
 export async function uninstallContinueMcpConfig(input: {

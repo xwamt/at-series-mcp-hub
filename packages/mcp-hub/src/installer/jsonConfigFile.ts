@@ -1,7 +1,6 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { atomicWriteFile, ensureDir } from '../fs/atomicWrite';
+import { atomicWriteFile, backupFileOnce, ensureDir } from '../fs/atomicWrite';
 import { withFileLock } from '../fs/fileLock';
 
 /** Snapshot of the config as it looked before AT Series first touched it. */
@@ -17,10 +16,46 @@ export function mcpConfigLockPath(configPath: string): string {
   );
 }
 
+/**
+ * Thrown instead of a bare `SyntaxError` so the plugin surfacing this can tell
+ * the user which file to look at and why. The IDEs accept `//` comments and
+ * trailing commas in these files; `JSON.parse` does not, and that mismatch is
+ * by far the most common reason a hand-maintained config stops updating.
+ */
+export class McpConfigParseError extends Error {
+  readonly configPath: string;
+
+  constructor(configPath: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `${configPath} is not valid JSON, so the AT Series MCP entry was left ` +
+        `unchanged. Comments and trailing commas are the usual cause: the IDE ` +
+        `tolerates them here, this installer does not. Parser reported: ${detail}`
+    );
+    this.name = 'McpConfigParseError';
+    this.configPath = configPath;
+    this.cause = cause;
+  }
+}
+
+/** Whitespace conventions of a document the user maintains by hand. */
+export type JsonConfigFormat = {
+  indent: string;
+  eol: string;
+  trailingNewline: boolean;
+};
+
 export type JsonConfigDocument = {
   config: Record<string, unknown>;
+  format: JsonConfigFormat;
   /** Exact bytes on disk; absent when the file does not exist yet. */
   raw?: string;
+};
+
+const DEFAULT_FORMAT: JsonConfigFormat = {
+  indent: '  ',
+  eol: '\n',
+  trailingNewline: true
 };
 
 /**
@@ -46,13 +81,22 @@ export async function readJsonConfigDocument(
     raw = await fs.readFile(configPath, 'utf8');
   } catch (error) {
     if (errorCode(error) === 'ENOENT') {
-      return { config: {} };
+      return { config: {}, format: DEFAULT_FORMAT };
     }
     throw error;
   }
 
-  const parsed: unknown = JSON.parse(stripBom(raw));
-  return { config: isRecord(parsed) ? parsed : {}, raw };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripBom(raw));
+  } catch (error) {
+    throw new McpConfigParseError(configPath, error);
+  }
+  return {
+    config: isRecord(parsed) ? parsed : {},
+    format: formatOf(raw),
+    raw
+  };
 }
 
 /**
@@ -64,53 +108,40 @@ export async function readJsonConfigDocument(
 export async function writeJsonConfigDocument(input: {
   configPath: string;
   config: Record<string, unknown>;
+  format: JsonConfigFormat;
   existed: boolean;
 }): Promise<void> {
   if (input.existed) {
-    await backupOnce(input.configPath);
+    await backupFileOnce(input.configPath, mcpConfigBackupPath(input.configPath));
   }
-  await atomicWriteFile(
-    input.configPath,
-    `${JSON.stringify(input.config, null, 2)}\n`,
-    { mode: 'preserve' }
-  );
+  await atomicWriteFile(input.configPath, serialize(input.config, input.format), {
+    mode: 'preserve'
+  });
 }
 
 /**
- * Keep the *first* copy, which is the only one guaranteed to predate us. A
- * later rewrite that captured the file we ourselves produced would be worth
- * nothing as a recovery point.
- *
- * `copyFile` gives the backup the source's permissions, so a config kept at
- * 0600 does not get a world-readable twin.
+ * Key order survives for free — object spread and `JSON.stringify` both keep
+ * insertion order — but whitespace does not, so carry it across explicitly.
+ * Comments cannot survive `JSON.parse`; a config that has them is rejected
+ * before it ever reaches this function.
  */
-async function backupOnce(configPath: string): Promise<void> {
-  const backupPath = mcpConfigBackupPath(configPath);
-  if (await exists(backupPath)) {
-    return;
-  }
-
-  // Copy aside first: a crash mid-copy leaves an unpromoted temp file rather
-  // than a truncated backup that would then never be refreshed.
-  const tmpPath = `${backupPath}.${process.pid}.${crypto
-    .randomBytes(8)
-    .toString('hex')}.tmp`;
-  try {
-    await fs.copyFile(configPath, tmpPath);
-    await fs.rename(tmpPath, backupPath);
-  } catch (error) {
-    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+function serialize(
+  config: Record<string, unknown>,
+  format: JsonConfigFormat
+): string {
+  const body = JSON.stringify(config, null, format.indent);
+  const text = format.trailingNewline ? `${body}\n` : body;
+  return format.eol === '\n' ? text : text.replace(/\n/g, format.eol);
 }
 
-async function exists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
+function formatOf(raw: string): JsonConfigFormat {
+  // The first indented line of a JSON object is always one level deep.
+  const indent = /\n([ \t]+)\S/.exec(raw)?.[1];
+  return {
+    indent: indent ?? DEFAULT_FORMAT.indent,
+    eol: raw.includes('\r\n') ? '\r\n' : '\n',
+    trailingNewline: /\n$/.test(raw)
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

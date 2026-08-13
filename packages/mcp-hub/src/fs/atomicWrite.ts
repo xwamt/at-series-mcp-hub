@@ -66,6 +66,49 @@ export async function atomicWriteFile(
   }
 }
 
+/**
+ * Snapshot a file we are about to rewrite, keeping only the *first* copy.
+ *
+ * A later snapshot would capture a file we ourselves produced, which is
+ * worthless as a recovery point. Copying aside before the rename means a crash
+ * mid-copy leaves an unpromoted temp file rather than a truncated backup that
+ * would then never be refreshed. `copyFile` carries the source's permissions
+ * over, so a config kept at 0600 does not get a world-readable twin.
+ *
+ * No-op when the source is missing or a backup already exists.
+ */
+export async function backupFileOnce(
+  filePath: string,
+  backupPath: string
+): Promise<void> {
+  if (await pathExists(backupPath)) {
+    return;
+  }
+  if (!(await pathExists(filePath))) {
+    return;
+  }
+
+  const tmpPath = `${backupPath}.${process.pid}.${crypto
+    .randomBytes(8)
+    .toString('hex')}.tmp`;
+  try {
+    await fs.copyFile(filePath, tmpPath);
+    await fs.rename(tmpPath, backupPath);
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export type EnsureDirOptions = {
   /** `'preserve'` leaves existing directories alone and creates at the umask. */
   mode?: number | 'preserve';
