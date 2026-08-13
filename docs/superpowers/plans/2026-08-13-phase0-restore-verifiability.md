@@ -235,29 +235,31 @@ git status --porcelain | wc -l
 
 三个插件的 `node_modules/@at-series/` 当前是**空目录**，`tsc --noEmit` 各报 10–11 个 `TS2307`。
 
-> **原计划已被 Task 2 的甄别结果证伪，此处为修订版（2026-08-13）。**
-> 原方案是「统一改回 npm 的 `^0.2.1`」。这行不通：Task 2 的在制品 A 已经把三个插件的 `src/mcp/hostApp.ts` 删掉、改从 hub 导入 `detectHostApp`，而这个导出只存在于**未发布的 0.2.2**。回退到 0.2.1 会让三个插件 import 一个不存在的符号，编译照样失败。
-> `file:` 依赖不是失误，是这个增量在等发版。正确做法是把它做完。
+> **本 Task 的方案修订过两次，此处为最终版（2026-08-13）。**
+>
+> **第一版（已废弃）：** 「统一改回 npm 的 `^0.2.1`」。被 Task 2 的甄别证伪——在制品 A 已把三个插件的 `src/mcp/hostApp.ts` 删掉、改从 hub 导入 `detectHostApp`，而该导出只存在于未发布的 0.2.2，回退会 import 到不存在的符号。
+>
+> **第二版（已废弃）：** 「发布 hub 0.2.2，三插件依赖 `^0.2.2`」。0.2.2 已完成全部发版前验证，但用户决定**暂不发布 npm**。
 
-**决策：先发布 hub 0.2.2 修好构建，三插件依赖 `^0.2.2`。** 阶段 1 完成出站加固后再发 0.3.0。理由：`file:` 路径依赖让 CI 和干净检出无法工作，必须先有一个可从 npm 解析的版本；而 0.2.2 的内容（`detectHostApp` 导出）已经完成且文档同步到位，具备发版条件。
+**最终决策：保持 `file:` 本地构建依赖，hub 产物直接打进 VSIX，不发 npm 包。**
+
+已验证这条路径端到端可用：`npm install` 在插件的 `node_modules/@at-series/mcp-hub` 建立指向本地 hub 的符号链接（解析到 0.2.2）；esbuild 把 hub 的 `dist/index.js` 内联进 `extension.js`；`scripts/copy-hub.mjs` 把 `dist/hub.js` 复制进插件 `dist/`。打出的 VSIX 内 `hub.js` 与本地构建产物 sha256 完全一致。
+
+**代价（必须知晓，不要在后续任务里踩）：**
+
+1. **构建有顺序依赖。** 必须先在 `at-series-mcp-hub` 跑 `npm run build && npm run build:hub`，插件才能装/构建。hub 的 `dist/` 是 gitignored，干净检出后不存在。
+2. **CI 需要跨仓检出。** 三个插件各自是独立 GitHub 仓库，`file:../at-series-mcp-hub/...` 在单仓 CI 里不存在。Task 8 的插件工作流必须额外检出 hub 仓并先构建它——已在 Task 8 中体现。
+3. **VSIX 不可复现。** 产物内容取决于构建时 hub 工作区的状态，包含未提交改动。发布正式版本前应确认 hub 处于干净且已打标签的状态。
+
+**Files:**
+- Modify: `at-terminal-series/package.json:314`（保持 `file:`，仅提交）
+- Modify: `at-jumpserver-series/package.json:253`（同上）
+- Modify: `at-grafana-series/package.json:177`（同上）
+- Modify: 三仓 `package-lock.json`（重装后重新生成）
 
 **Files:**
 - Modify: `at-terminal-series/package.json:314`
-- Modify: `at-jumpserver-series/package.json:253`
-- Modify: `at-grafana-series/package.json`（`dependencies` 段）
-
-- [ ] **Step 1：确认 hub 0.2.2 的内容完整且可发布**
-
-```bash
-cd ~/项目/at/at-series-mcp-hub
-git log --oneline -3
-node -e "console.log(require('./packages/mcp-hub/package.json').version)"
-rg -n 'detectHostApp|slugifyHostAppId' packages/mcp-hub/src/index.ts packages/mcp-hub/src/protocol/index.ts
-```
-
-预期：版本输出 `0.2.2`；`detectHostApp` 与 `slugifyHostAppId` 确实从 `protocol/index.ts` 导出，且能经 `src/index.ts` 到达包的公共 API。若 `src/index.ts` 没有再导出，补上——否则插件 `import { detectHostApp } from '@at-series/mcp-hub'` 会失败。
-
-- [ ] **Step 2：构建、测试、发布 hub 0.2.2**
+- [x] **Step 1：先构建 hub（插件安装的前置条件）**
 
 ```bash
 cd ~/项目/at/at-series-mcp-hub
@@ -266,29 +268,50 @@ npm install
 npm run typecheck && npm run build && npm run build:hub && npm test
 ```
 
-预期：全部通过。然后：
+预期：全部通过，产出 `Bundled hub.js (0.2.2) -> dist/hub.js`。
+**已完成**（2026-08-13）：typecheck 通过，109/109 测试通过（须在沙箱外跑，沙箱禁止创建 `.cursor` 目录会导致 4 个 installer 用例误报 EPERM）。
+
+- [x] **Step 2：三个插件重装依赖，建立本地链接**
 
 ```bash
-cd packages/mcp-hub
-npm pack --dry-run
+cd ~/项目/at/at-terminal-series
+rm -rf node_modules package-lock.json
+npm install
 ```
 
-确认产物含 `dist/index.d.ts` 且其中有 `detectHostApp` 的类型声明：
+对 `at-jumpserver-series`、`at-grafana-series` 重复。三仓 `package.json` 的依赖保持 `file:../at-series-mcp-hub/packages/mcp-hub` **不变**。
+
+验证链接指向本地 0.2.2：
 
 ```bash
-rg -n 'detectHostApp' dist/index.d.ts
+node -e "console.log(require('./node_modules/@at-series/mcp-hub/package.json').version)"
+ls -ld node_modules/@at-series/mcp-hub    # 应是符号链接
 ```
 
-预期：有输出。确认无误后发布：
+**已完成**（2026-08-13）：三仓均为符号链接，版本 `0.2.2`。
+
+- [x] **Step 3：验证 VSIX 确实带上本地构建的 hub**
 
 ```bash
-npm publish
-npm view @at-series/mcp-hub version
+cd ~/项目/at/at-terminal-series
+npm run package:mcp
+v=.package-work/mcp/at-terminal-mcp-0.3.0.vsix
+unzip -p "$v" extension/dist/hub.js | shasum -a 256
+shasum -a 256 ../at-series-mcp-hub/packages/mcp-hub/dist/hub.js
+unzip -p "$v" extension/dist/hub-version.json
 ```
 
-预期：输出 `0.2.2`。
+预期：两个 sha256 完全一致；`hub-version.json` 为 `{"version":"0.2.2","protocolVersion":2}`。
+**已完成**（2026-08-13）：sha 一致（`af7add5ff61cca88f7da…`），且 `extension.js` 中 `slugifyHostAppId` 命中 9 次，证明 hub 的 `detectHostApp` 已内联进插件产物。
 
-- [ ] **Step 3：把三个插件的依赖指向已发布的 0.2.2**
+> 以下 Step 4 起为**未完成**部分。
+
+- [ ] **Step 4（历史步骤，已不适用）**
+
+原「把三个插件的依赖指向已发布的 0.2.2」不再执行。依赖声明保持 `file:`，无需改动。
+
+<details>
+<summary>原文（保留以备将来恢复 npm 发布时参考）</summary>
 
 在每个 `package.json` 的 `dependencies` 中，将
 
@@ -302,57 +325,32 @@ npm view @at-series/mcp-hub version
 "@at-series/mcp-hub": "^0.2.2",
 ```
 
-- [ ] **Step 4：重装三个插件的依赖（必须在本机重新解析原生包）**
+</details>
 
-当前 `node_modules` 是在其他平台安装后拷贝过来的：缺 `@rollup/rollup-darwin-arm64`，且 `node_modules/.bin/tsc` 没有执行权限。必须整棵删除重装。hub 已在 Step 2 重装过，此处只处理三个插件。
-
-```bash
-cd ~/项目/at/at-terminal-series
-rm -rf node_modules package-lock.json
-npm install
-```
-
-对 `at-jumpserver-series`、`at-grafana-series` 重复。
-
-装完后确认拿到的确实是刚发布的版本：
+- [x] **Step 5：验证三个插件的 typecheck 与测试**
 
 ```bash
-node -e "console.log(require('./node_modules/@at-series/mcp-hub/package.json').version)"
-```
-
-预期输出 `0.2.2`。若仍是 `0.2.1`，说明 npm registry 缓存未刷新，等一会儿或 `npm install @at-series/mcp-hub@0.2.2` 显式指定。
-
-- [ ] **Step 5：验证三个插件的 typecheck**
-
-```bash
-cd ~/项目/at/at-terminal-series && npm run typecheck
-cd ~/项目/at/at-grafana-series && npm run typecheck
-```
-
-预期：这两个仓库输出为空，退出码 0。
-`at-jumpserver-series` 此时仍会报 3 个错误（Task 4 处理），其余 11 个 `TS2307` 应已消失：
-
-```bash
+cd ~/项目/at/at-terminal-series && npm run typecheck && npm test
+cd ~/项目/at/at-grafana-series && npm run typecheck && npm test
 cd ~/项目/at/at-jumpserver-series && npm run typecheck
 ```
 
-预期仅剩：
+**已完成**（2026-08-13）：
+- terminal typecheck 干净，**304/304** 测试通过
+- grafana typecheck 干净，**294/294** 测试通过
+- jumpserver 仍有 **4 个** 类型错误（不是原先估计的 3 个），全部在 `test/mcp/p0c.functional.e2e.test.ts`：`:38` TS2741 缺 `zoneName`、`:101`/`:102` TS2339 `tools` 不存在于 `never`、`:120` TS2339 `error` 不存在于 `never`。原先报告的 `:83` TS7006 已不复存在。交由 Task 4 处理。
 
-```text
-test/mcp/p0c.functional.e2e.test.ts(38,7): error TS2741: Property 'zoneName' is missing ...
-test/mcp/p0c.functional.e2e.test.ts(83,36): error TS7006: Parameter 't' implicitly has an 'any' type.
-test/mcp/p0c.functional.e2e.test.ts(101,23): error TS2339: Property 'tools' does not exist on type 'never'.
-```
+- [ ] **Step 6：提交依赖状态**
 
-- [ ] **Step 6：提交**
+三个插件的 `package.json` 内容其实未变（`file:` 依赖本就是工作区状态），但 `package-lock.json` 因重装而重新生成，且**恰好消除了全部已知漏洞**（见 Task 7）。
 
 ```bash
 cd ~/项目/at/at-terminal-series
 git add package.json package-lock.json
-git commit -m "build: depend on the published @at-series/mcp-hub 0.2.2"
+git commit -m "build: regenerate the lockfile against the local hub build"
 ```
 
-三个插件仓各提交一次。hub 仓若 `package-lock.json` 有变化也提交，提交信息用 `build: refresh lockfile after 0.2.2 install`。
+三个插件仓各提交一次。提交信息正文应说明：依赖保持 `file:` 本地构建，构建前必须先构建 hub。
 
 - [ ] **Step 7：写台账**
 
@@ -609,7 +607,11 @@ git commit -m "build: track the AT Grafana entry icons required by the packaging
 
 ## Task 7：升级存在已知漏洞的依赖
 
-`at-jumpserver-series` 有 7 个漏洞（4 个 high），其中 `ws@8.18.0` 是直接依赖且落在 `8.0.0–8.20.1` 的内存耗尽 DoS 区间。`at-series-mcp-hub` 有 2 个（经 `@modelcontextprotocol/sdk` 传入的 hono）。terminal 与 grafana 干净。
+> **本 Task 已被 Task 3 的重装动作意外解决（2026-08-13）。** 漏洞的来源是**陈旧的 lockfile 把传递依赖钉在了旧版本**，而非 `package.json` 的版本范围写错。Task 3 删除 lockfile 重装后，四仓 `npm audit --omit=dev` 全部输出 `found 0 vulnerabilities`：`ws` 解析到 **8.21.3**（已越过 `8.0.0–8.20.1` 的危险区间），hub 的 `@modelcontextprotocol/sdk` 解析到 **1.30.0**（带走了有问题的 hono）。
+>
+> **剩余工作只有两项：** 把重新生成的 lockfile 提交（已并入 Task 3 Step 6），以及在 CI 里加 `npm audit --audit-level=high` 防止回退（已在 Task 8 的工作流中）。下文保留原始分析作为背景。
+
+`at-jumpserver-series` 原有 7 个漏洞（4 个 high），其中 `ws@8.18.0` 是直接依赖且落在 `8.0.0–8.20.1` 的内存耗尽 DoS 区间。`at-series-mcp-hub` 有 2 个（经 `@modelcontextprotocol/sdk` 传入的 hono）。terminal 与 grafana 干净。
 
 **Files:**
 - Modify: `at-jumpserver-series/package.json`（`ws` 版本）
@@ -696,7 +698,11 @@ done
 
 - [ ] **Step 2：三个插件仓的工作流**
 
-`at-terminal-series/.github/workflows/ci.yml`、`at-jumpserver-series/.github/workflows/ci.yml`、`at-grafana-series/.github/workflows/ci.yml` 三份内容相同：
+> **因 Task 3 的 `file:` 本地依赖决策，插件 CI 必须跨仓检出。** `file:../at-series-mcp-hub/packages/mcp-hub` 在单仓检出里不存在，`npm ci` 会直接失败。工作流需把 hub 仓检出为兄弟目录并**先构建它**，再安装插件依赖。
+>
+> 另注意：`npm ci` 要求 lockfile 与 `package.json` 严格一致，而 `file:` 依赖的 lockfile 记录的是相对路径链接。只要目录布局与本地一致就能工作；若 CI 报 lockfile 不同步，改用 `npm install --no-save`。
+
+`at-terminal-series/.github/workflows/ci.yml`、`at-jumpserver-series/.github/workflows/ci.yml`、`at-grafana-series/.github/workflows/ci.yml` 三份内容相同，只需把 `<PLUGIN_REPO_DIR>` 换成各自的目录名：
 
 ```yaml
 name: CI
@@ -710,25 +716,50 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # The plugin depends on the hub through a file: path to a sibling
+      # directory, so both repos have to be on disk in that exact layout.
+      - name: Check out plugin
+        uses: actions/checkout@v4
+        with:
+          path: <PLUGIN_REPO_DIR>
+
+      - name: Check out the hub
+        uses: actions/checkout@v4
+        with:
+          repository: xwamt/at-series-mcp-hub
+          path: at-series-mcp-hub
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
-      - name: Install dependencies
+      # dist/ is gitignored, so the hub must be built before the plugin can
+      # resolve @at-series/mcp-hub.
+      - name: Build the hub
+        working-directory: at-series-mcp-hub
+        run: |
+          npm ci
+          npm run build
+          npm run build:hub
+
+      - name: Install plugin dependencies
+        working-directory: <PLUGIN_REPO_DIR>
         run: npm ci
 
       - name: Typecheck
+        working-directory: <PLUGIN_REPO_DIR>
         run: npm run typecheck
 
       - name: Test
+        working-directory: <PLUGIN_REPO_DIR>
         run: npm test
 
       - name: Audit production dependencies
+        working-directory: <PLUGIN_REPO_DIR>
         run: npm audit --omit=dev --audit-level=high
 ```
+
+**已知局限：** hub 仓检出的是默认分支，而插件分支上的改动可能依赖 hub 分支上尚未合并的改动。跨仓联动改动时，需临时给 `Check out the hub` 步骤加 `ref:` 指向对应分支。这是 `file:` 依赖的固有代价，已记录在 Task 3。
 
 - [ ] **Step 3：hub 仓的工作流**
 
