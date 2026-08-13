@@ -166,3 +166,30 @@ describe('outbound timeouts', () => {
     await hung.close();
   }, 10_000);
 });
+
+describe('response size ceiling', () => {
+  it('rejects a bridge response larger than the 2 MiB protocol limit', async () => {
+    const flood = await startHostileBridge({
+      mode: 'oversized',
+      bytes: 3 * 1024 * 1024
+    });
+
+    await expect(
+      bridgeGetTools({ port: flood.port, token: 't'.repeat(32) })
+    ).rejects.toThrow(/too large/i);
+
+    await flood.close();
+  }, 20_000);
+
+  it('accepts a response comfortably under the limit', async () => {
+    const small = await startHostileBridge({ mode: 'oversized', bytes: 1024 });
+
+    const result = await bridgeGetTools({
+      port: small.port,
+      token: 't'.repeat(32)
+    });
+    expect(result.tools).toEqual([]);
+
+    await small.close();
+  });
+});

@@ -19,6 +19,7 @@
 import {
   AT_SERIES_TOKEN_HEADER,
   BRIDGE_HOST,
+  BRIDGE_MAX_BODY_BYTES,
   resolveBridgeEndpoints,
   type BridgeErrorBody,
   type BridgeHealthResponse,
@@ -87,8 +88,48 @@ function isBridgeErrorBody(value: unknown): value is BridgeErrorBody {
   );
 }
 
+async function readLimitedText(res: Response): Promise<string> {
+  const declared = res.headers.get('content-length');
+  if (declared && Number(declared) > BRIDGE_MAX_BODY_BYTES) {
+    throw new BridgeHttpError(
+      `Bridge response too large: ${declared} bytes exceeds ${BRIDGE_MAX_BODY_BYTES}`,
+      { code: 'INTERNAL_ERROR', status: res.status }
+    );
+  }
+
+  const body = res.body;
+  if (!body) {
+    return '';
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > BRIDGE_MAX_BODY_BYTES) {
+        // Stop pulling immediately; do not buffer the rest.
+        await reader.cancel();
+        throw new BridgeHttpError(
+          `Bridge response too large: exceeds ${BRIDGE_MAX_BODY_BYTES} bytes`,
+          { code: 'INTERNAL_ERROR', status: res.status }
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
+}
+
 async function parseJsonBody(res: Response): Promise<unknown> {
-  const text = await res.text();
+  const text = await readLimitedText(res);
   if (!text) return undefined;
   try {
     return JSON.parse(text);
