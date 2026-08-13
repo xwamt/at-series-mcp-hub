@@ -506,3 +506,22 @@ hub 的 lockfile 在 P0-T3a 收尾时已随 `5aa74b6`（`build: reinstall depend
 
 **一处刻意未动（如实记录）。** `955046d` 给 fixture 填的是 `zoneName: 'default'`，而同一 fixture 的 `nodePath: ['Default']`；生产侧 `normalizeJumpServerAsset` 的算法是 `zoneName: zoneName || nodePath.at(-1) || ''`，即一个没有显式 zone 的真实资产在此 nodePath 下会得到 **`'Default'`**（大写 D）。故 `'default'` 与本 fixture 的 `nodePath` 严格说不自洽。未改动的理由：该值不参与本测试的任何断言（`listCachedAssets` 返回空数组，断言只覆盖 15 个工具名、`USER_CANCELLED` 与 installer 行为），`'default'` 作为「zone 恰好就叫 default 的资产」也完全合法，为此改动一个已提交且通过的 fixture 属无收益 churn。记录在此以备将来有人以该 fixture 为样板推断 `zoneName` 与 `nodePath` 的关系。
 
+
+### 2026-08-13 · P2-B2 · Continue installer 补齐原子写、跨进程锁与备份
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-series-mcp-hub |
+| 动机 | **H6 / X1 的漏网部分**。`3a66766` 把 Cursor/Kiro 迁到了 `jsonConfigFile.ts` 的锁 + 原子写 + 备份，但 **Continue 没有一并迁移**——`continueYaml.ts:140` 仍是裸 `fs.writeFile`。实测 `rg 'fs\.writeFile' src/installer/` 只剩它一处。三个缺陷同时存在：无锁（三插件同时激活时并发读-改-写）、非原子（崩溃即截断）、无备份。**其中最严重的是顺序**：`removeLegacyContinueYamls(dir)` 在 `:110` 先 unlink 掉 `at-terminal.yaml` / `at-jumpserver-terminal.yaml`，写入在 `:140`——两者之间任何失败都让用户**新旧配置都没有** |
+| 代码 diff | `src/fs/atomicWrite.ts` **+43**：新增 `backupFileOnce(filePath, backupPath)` 与私有 `pathExists`。从 `jsonConfigFile.ts` 的私有 `backupOnce` 提升为共享 fs 原语——两个 installer 都需要它，且它本质是文件系统操作而非 JSON 专属。`src/installer/jsonConfigFile.ts` **-35/+3**：删除私有 `backupOnce` 与 `exists`，改调共享实现；`crypto` import 随之移除。`src/installer/continueYaml.ts` **+37/-24**：`removeLegacyContinueYamls` 由「删除并返回是否删过」拆成 `legacyContinueYamlsPresent`（只探测）+ `removeLegacyContinueYamls`（只删除，返回 void）；`ensureContinueMcpConfig` 整体包进 `withMcpConfigLock`；写入改 `atomicWriteFile(target, text, { mode: 'preserve' })`；写入前 `backupFileOnce`；**legacy 删除移到写入成功之后**。`test/installer.continue.test.ts` **+74**：3 个新用例 |
+| 契约影响 | 否 —— 未改任何导出签名、未改 YAML 文档形状、未改 `ensureAtSeriesMcpConfig` 的入参与返回类型。`backupFileOnce` 是包内新增（未加进 `src/index.ts` 的公共导出面）。P2-A 已在 `v1.md` §9 与 §3.2 写下的原子写/备份/锁规范，本次是让 Continue 这条路径**兑现**该规范，规范文本无需改动 |
+| 文档 diff | 无（规范已由 P2-A 落地，本次为实现补齐） |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否。行为差异仅一处：首次改写既有配置时会多产生一个 `at-series.yaml.at-series.bak`，与 Cursor/Kiro 已有的行为一致 |
+| 核心不变量 | 已核对 INV-1..INV-6 未被破坏。**INV-1 是本次的正面加固**：三插件在 IDE 启动时并发写同一份 Continue 配置，无锁时最后一个写入者会静默覆盖其他人的结果——这正是「本系列只能有一条 `AT Series`」在多插件共存下被破坏的路径之一。INV-2 未触及（仍只指向 `~/.at-series/mcp/hub.js`）；INV-3/INV-4/INV-5/INV-6 完全未涉及，`src/hub/**` 与 `src/protocol/**` 本次零改动 |
+| 验证 | **严格 TDD，3 个用例先红后绿，RED 失败原文即缺陷本身。** ① 顺序缺陷：`keeps the legacy files when the new config cannot be written` —— 把 `at-series.yaml` 造成目录使写入必然失败，RED 时 `await expect(fs.access(legacy)).resolves` 报 `promise rejected "Error: ENOENT..." instead of resolving`，即**旧配置在写失败后已被删除**。② 无备份：`backs the previous config up once before replacing it` —— RED 报 `ENOENT ... at-series.yaml.at-series.bak`；该用例还断言第二次调用**不覆盖**首份备份。③ 无锁：`serialises concurrent writers so no update is lost` —— 5 个并发 `ensureAtSeriesMcpConfig`，RED 时 `expected [...] to have a length of 1 but got 5`，即五个写入者全都认为自己做了首次写入（丢失更新）。GREEN 后该文件 5/5。**两个既有用例在 RED 阶段始终通过**，证明用例组有鉴别力而非恒假。**全量（沙箱外）：** `npm run typecheck` 退出码 0、零诊断；`npm test` **29 文件 / 346 用例全部通过**。**回归确认：** `rg 'fs\.writeFile' src/installer/` 现在零匹配 |
+| 提交 | `37c4e90`（4 文件，+242/-74），分支 `chore/at-series-optimization-phase0`，未推送远程 |
+
+**为什么把 `backupOnce` 提到 `fs/atomicWrite.ts` 而不是从 `jsonConfigFile.ts` 导出。** 后者的名字与职责都是 JSON 文档的读写，而 Continue 的配置是 YAML；从一个 JSON 专属模块里 import 备份能力，会让下一个读代码的人以为 Continue 也走了 JSON 路径。备份本身与文件格式无关，和 `atomicWriteFile` 一样是文件系统原语，放在一起也便于将来第三种配置格式复用。
+
+**`withMcpConfigLock` 的名字保留未改。** 它定义在 `jsonConfigFile.ts` 里，但参数只是一个 configPath、语义是「串行化对某个 IDE MCP 配置的读-改-写」，对 YAML 同样成立，故直接复用而未另造一个 `withContinueConfigLock`。若将来 `jsonConfigFile.ts` 继续膨胀，可以把锁与备份一起下沉到 `installer/configFile.ts`。
