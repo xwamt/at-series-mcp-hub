@@ -9,6 +9,7 @@
 // --- protocol (types, constants, path helpers) ---
 export * from './protocol/index';
 export * from './protocol/paths';
+export { createBridgeToken, timingSafeEqualToken } from './protocol/token';
 
 // --- registry ---
 export {

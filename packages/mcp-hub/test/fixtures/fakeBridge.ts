@@ -10,6 +10,7 @@ import {
   type HostApp,
   type ToolCatalogEntry
 } from '../../src/protocol/index';
+import { timingSafeEqualToken } from '../../src/protocol/token';
 
 export type FakeBridgeOptions = {
   token?: string;
@@ -105,7 +106,7 @@ export async function startFakeBridge(
 
   const server = http.createServer(async (req, res) => {
     const headerToken = req.headers[AT_SERIES_TOKEN_HEADER];
-    if (headerToken !== token) {
+    if (typeof headerToken !== 'string' || !timingSafeEqualToken(headerToken, token)) {
       sendJson(res, 401, unauthorized());
       return;
     }
