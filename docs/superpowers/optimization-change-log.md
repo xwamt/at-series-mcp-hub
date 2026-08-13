@@ -630,6 +630,31 @@ Received 里可以直接读到：标题只有 `prod-db`（**无地址**），正
 
 **G2 的 webview 侧是怎么确认没漏的。** 先做静态穷举：`rg '/instances/|iframeSrc|buildDashboardUrl|buildAlertRuleUrl' src/` 显示对外 URL 只有两个生产者（`buildDashboardUrl` / `buildAlertRuleUrl`），两个消费者（`DashboardPanel.ts:71` / `AlertDetailPanel.ts:64`）都只是把它们的返回值原样交给 `renderEmbedWebviewHtml` 的 `iframeSrc`，而 `html.ts` 里 `proxyOrigin` 只参与 CSP 的 `frame-src`（origin 级匹配，路径变长不影响）与 `buildEmbedWebviewOptions` 的 `portMapping`（只取端口）。因此把 token 收进 `requireEmbedBase()` 这一个私有方法后，两个面板**无需任何改动**即自动带上 token。但「无需改动」正是最容易出事的形态，而两个面板的既有单测用的都是 **fake proxy**（`buildDashboardUrl: vi.fn(...)` 返回硬编码 URL），根本不会察觉真实 URL 形态变化。故补了上文那条端到端用例，并用变异验证确认它确有鉴别力。
 
+
+### 2026-08-13 · OPS-1 · 陈旧 hub `dist/` 会静默让插件测试结果失真（流程缺口，已确认 CI 无此问题）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | 全部 4 个（本条为流程记录，无代码改动） |
+| 动机 | P3-G 执行中发现：`at-grafana-series` 里 `require('@at-series/mcp-hub').timingSafeEqualToken` 返回 `undefined`，尽管该函数早在 P2-C 的 `16b4250` 就已实现并导出 |
+| 代码 diff | 无。仅重新执行 `npm run build && npm run build:hub` |
+| 契约影响 | 否 |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 不涉及 |
+| 验证 | 重建 dist 后确认 `timingSafeEqualToken` / `createBridgeToken` / `detectHostApp` 三个导出均为 `function`（此前 `timingSafeEqualToken` 为 `undefined`）；三仓链接版本均由陈旧产物变为 **0.3.0**。重建后复跑：grafana **324/324**、jumpserver **261/261**、hub **346/346**，typecheck 三仓零诊断 |
+| 提交 | 无代码提交（`dist/` 被 gitignore） |
+
+**根因：** 三个插件通过 `file:../at-series-mcp-hub/packages/mcp-hub` 依赖 hub，Node 解析到的是**构建产物** `dist/`，而不是 `src/`。`dist/` 被 gitignore 且没有任何机制保证它与 `src/` 同步，于是 hub 源码更新后，插件侧仍在对着旧产物跑测试。这正是 P0-T3 台账中记录的「构建顺序依赖」代价的具体表现。
+
+**危害在于它是静默的。** 插件测试照常全绿，但绿的是过时的行为。本轮有**三个并行任务各自独立撞上它**：P3-G 发现 `timingSafeEqualToken` 不存在；P3-J 的 `d22ea5c` 与 P3-G 的 `6c5ae80` 各自修了同一条 `hubSync.test.ts` 夹具——该夹具写死占位摘要 `'abc'`，在 P2-A 的 `2138209`（no-op 前校验磁盘 `hub.js` 真实哈希）落地后语义已变，但因为两仓都跑在旧 dist 上，这条漂移对谁都不可见。
+
+**CI 没有这个问题（已核实）。** 三个插件的 `.github/workflows/ci.yml` 均先 `actions/checkout` 出 `xwamt/at-series-mcp-hub`，执行 `npm ci` → `npm run build` → `npm run build:hub`，然后才安装插件依赖。因此**门禁是可信的**，缺口只存在于本地开发。
+
+**未做的加固（有意留作后续项）：** 可以给三个插件加一个 `pretest` 守卫，在链接的 hub `dist/` 缺失或早于其 `src/` 时快速失败并打印重建命令。本次没做，原因有二：一是 `pretest` 去构建一个兄弟仓属于意外耦合，且将来若切回 npm 依赖会失效；二是当时 `at-terminal-series` 有并行 agent 在改动，同时向三仓加脚本的冲突风险不划算。**在此之前，本地跑插件测试前请先在 hub 仓执行 `npm run build && npm run build:hub`。**
+
+
 ### 2026-08-13 · P4-T · AT Terminal 授权模型重建：SFTP 写授权粒度、命令白名单、verifier 必填
 
 | 字段 | 内容 |
@@ -688,25 +713,4 @@ AssertionError: expected { …(2) } to deeply equal { secondWrite: 'BLOCKED', pr
 
 **并发协作说明：五次提交全部带 pathspec，未夹带他人在制品。** 本工作区同时有多个 agent 在同一分支上活动，`git commit` 默认提交整个索引（P2-C 的教训，台账 L484）。本任务的每一次 `git add` 与 `git commit` 都带明确路径列表，且每次提交后立即 `git show --stat HEAD` 复核文件数（15 / 12 / 7 / 4 / 4，与预期逐一相符）。全程 `package.json`、`package-lock.json`、`docs/releases/0.3.0.md` 三个他人修改的文件保持未暂存状态，`docs/handoffs/` 保持未跟踪。本条台账写入 at-series-mcp-hub 仓时同样带 pathspec——该仓当时有他人未提交的 `packages/mcp-hub/src/installer/cursor.ts` 等三个文件在索引外，未被波及。
 
-### 2026-08-13 · OPS-1 · 陈旧 hub `dist/` 会静默让插件测试结果失真（流程缺口，已确认 CI 无此问题）
-
-| 字段 | 内容 |
-|---|---|
-| 仓库 | 全部 4 个（本条为流程记录，无代码改动） |
-| 动机 | P3-G 执行中发现：`at-grafana-series` 里 `require('@at-series/mcp-hub').timingSafeEqualToken` 返回 `undefined`，尽管该函数早在 P2-C 的 `16b4250` 就已实现并导出 |
-| 代码 diff | 无。仅重新执行 `npm run build && npm run build:hub` |
-| 契约影响 | 否 |
-| 文档 diff | 本条目 |
-| protocolVersion | 不变（Bridge 1 / Hub 2） |
-| 插件需跟改 | 否 |
-| 核心不变量 | 不涉及 |
-| 验证 | 重建 dist 后确认 `timingSafeEqualToken` / `createBridgeToken` / `detectHostApp` 三个导出均为 `function`（此前 `timingSafeEqualToken` 为 `undefined`）；三仓链接版本均由陈旧产物变为 **0.3.0**。重建后复跑：grafana **324/324**、jumpserver **261/261**、hub **346/346**，typecheck 三仓零诊断 |
-| 提交 | 无代码提交（`dist/` 被 gitignore） |
-
-**根因：** 三个插件通过 `file:../at-series-mcp-hub/packages/mcp-hub` 依赖 hub，Node 解析到的是**构建产物** `dist/`，而不是 `src/`。`dist/` 被 gitignore 且没有任何机制保证它与 `src/` 同步，于是 hub 源码更新后，插件侧仍在对着旧产物跑测试。这正是 P0-T3 台账中记录的「构建顺序依赖」代价的具体表现。
-
-**危害在于它是静默的。** 插件测试照常全绿，但绿的是过时的行为。本轮有**三个并行任务各自独立撞上它**：P3-G 发现 `timingSafeEqualToken` 不存在；P3-J 的 `d22ea5c` 与 P3-G 的 `6c5ae80` 各自修了同一条 `hubSync.test.ts` 夹具——该夹具写死占位摘要 `'abc'`，在 P2-A 的 `2138209`（no-op 前校验磁盘 `hub.js` 真实哈希）落地后语义已变，但因为两仓都跑在旧 dist 上，这条漂移对谁都不可见。
-
-**CI 没有这个问题（已核实）。** 三个插件的 `.github/workflows/ci.yml` 均先 `actions/checkout` 出 `xwamt/at-series-mcp-hub`，执行 `npm ci` → `npm run build` → `npm run build:hub`，然后才安装插件依赖。因此**门禁是可信的**，缺口只存在于本地开发。
-
-**未做的加固（有意留作后续项）：** 可以给三个插件加一个 `pretest` 守卫，在链接的 hub `dist/` 缺失或早于其 `src/` 时快速失败并打印重建命令。本次没做，原因有二：一是 `pretest` 去构建一个兄弟仓属于意外耦合，且将来若切回 npm 依赖会失效；二是当时 `at-terminal-series` 有并行 agent 在改动，同时向三仓加脚本的冲突风险不划算。**在此之前，本地跑插件测试前请先在 hub 仓执行 `npm run build && npm run build:hub`。**
+**但台账本身出过一次顺序事故，如实记录。** 本条初次写入（`cdfdb57`）时，编辑基于的是**追加 OPS-1 之前**的文件快照，于是 P4-T 被插到了 OPS-1 **上方**，违反本台账「正序，越新越靠下」的约定。提交后立刻复核 `git show --stat` 发现 `81 insertions(+), 23 deletions(-)` 里那 23 行删除可疑，逐行取证后确认：**OPS-1 的内容一行未丢**，只是位置被顶到了下面，另外那 23 行由 LF 归一为 CRLF（该文件在仓库里本就是 CRLF——`HEAD~1` 的 654 行中 631 行带 `\r`，OPS-1 那 23 行是唯一的 LF 例外，故这次归一是让它与全文一致，不是回归）。随后用一次**纯重排**修正顺序：`diff <(去空行|sort) <(去空行|sort)` 对重排前后两个版本返回 0，即非空行内容的多重集完全一致，只有位置变化。**教训与 pathspec 那条同源**：共享可变状态不只是 `.git/index`，**同一个被多方追加的文件也是**；对这类文件的编辑必须在写入前重新读取尾部，而不是复用几分钟前的快照。
