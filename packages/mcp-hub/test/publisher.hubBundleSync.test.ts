@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -176,5 +177,115 @@ describe('syncHubBundle', () => {
     expect(result).toEqual({ updated: false, activeVersion: '0.1.0' });
     expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
     expect(await fs.readFile(hubVersionPath(home), 'utf8')).toBe(beforeMeta);
+  });
+
+  describe('on-disk integrity', () => {
+    it('rewrites hub.js when the file on disk no longer matches its recorded hash', async () => {
+      const content = 'module.exports = { v: "0.3.0" };\n';
+      const bundlePath = await candidate(content);
+      await syncHubBundle({
+        version: '0.3.0',
+        bundlePath,
+        pluginId: 'at.a',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      // Tamper: replace the executable while leaving the metadata untouched,
+      // which is exactly what a local attacker installing a backdoor would do.
+      await fs.writeFile(hubJsPath(home), '/* backdoor */\n');
+
+      const result = await syncHubBundle({
+        version: '0.3.0',
+        bundlePath,
+        pluginId: 'at.a',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      expect(result.updated).toBe(true);
+      const restored = await fs.readFile(hubJsPath(home), 'utf8');
+      expect(restored).not.toContain('backdoor');
+      expect(restored).toBe(content);
+    });
+
+    it('rewrites hub.js when the recorded version is higher but the file was tampered with', async () => {
+      // A lower-versioned plugin must still repair a corrupted hub.js rather
+      // than deferring to metadata that no longer describes anything on disk.
+      await writeActiveHub(home, { version: '0.9.0', content: 'active-0.9.0' });
+      await fs.writeFile(hubJsPath(home), '/* backdoor */\n');
+      const content = 'candidate-0.3.0';
+      const bundlePath = await candidate(content);
+
+      const result = await syncHubBundle({
+        version: '0.3.0',
+        bundlePath,
+        pluginId: 'at.b',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      expect(result.updated).toBe(true);
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
+      const meta = JSON.parse(
+        await fs.readFile(hubVersionPath(home), 'utf8')
+      ) as HubVersionRecord;
+      expect(meta.version).toBe('0.3.0');
+      expect(meta.bundleSha256).toBe(sha256Hex(content));
+    });
+
+    it('rewrites hub.js when the metadata exists but the file is gone', async () => {
+      const content = 'restored-0.1.0';
+      await writeActiveHub(home, { version: '0.1.0', content });
+      await fs.rm(hubJsPath(home));
+      const bundlePath = await candidate(content);
+
+      const result = await syncHubBundle({
+        version: '0.1.0',
+        bundlePath,
+        pluginId: 'at.terminal',
+        pluginVersion: '0.2.17',
+        home
+      });
+
+      expect(result).toEqual({ updated: true, activeVersion: '0.1.0' });
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
+    });
+  });
+
+  describe('corrupt metadata self-healing', () => {
+    it.each([
+      ['empty object', '{}'],
+      ['not JSON at all', 'not json {{{'],
+      ['a JSON array', '[]'],
+      ['null', 'null'],
+      ['missing bundleSha256', '{"version":"0.2.0"}'],
+      ['a non-semver version', '{"version":"garbage","bundleSha256":"abc"}'],
+      [
+        'a non-string version',
+        '{"version":3,"bundleSha256":"abc"}'
+      ]
+    ])('treats %s as no active hub and writes a fresh one', async (_label, raw) => {
+      const content = 'healed-0.1.0';
+      await writeActiveHub(home, { version: '0.1.0', content: 'stale' });
+      await fs.writeFile(hubVersionPath(home), raw, 'utf8');
+      const bundlePath = await candidate(content);
+
+      const result = await syncHubBundle({
+        version: '0.1.0',
+        bundlePath,
+        pluginId: 'at.terminal',
+        pluginVersion: '0.2.17',
+        home
+      });
+
+      expect(result).toEqual({ updated: true, activeVersion: '0.1.0' });
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
+      const meta = JSON.parse(
+        await fs.readFile(hubVersionPath(home), 'utf8')
+      ) as HubVersionRecord;
+      expect(meta.version).toBe('0.1.0');
+      expect(meta.bundleSha256).toBe(sha256Hex(content));
+    });
   });
 });

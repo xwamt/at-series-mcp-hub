@@ -31,10 +31,12 @@ export async function syncHubBundle(input: {
     .digest('hex');
 
   const active = await readActiveVersion(targetMeta);
-  if (active) {
-    if (!semver.valid(active.version)) {
-      throw new Error(`invalid active hub semver: ${active.version}`);
-    }
+  // The election may only defer to the recorded metadata while that metadata
+  // still describes the file the IDE actually executes. Skipping this check
+  // turns syncHubBundle into a shield for a tampered hub.js: an attacker who
+  // swaps the bundle and leaves hub-version.json alone would otherwise see
+  // every plugin activation decline to repair it.
+  if (active && (await onDiskSha256(targetHub)) === active.bundleSha256) {
     if (semver.gt(active.version, input.version)) {
       return { updated: false, activeVersion: active.version };
     }
@@ -62,16 +64,78 @@ export async function syncHubBundle(input: {
   return { updated: true, activeVersion: input.version };
 }
 
-async function readActiveVersion(
-  metaPath: string
-): Promise<HubVersionRecord | undefined> {
+/** `undefined` when hub.js is absent, which can never equal a recorded hash. */
+async function onDiskSha256(hubPath: string): Promise<string | undefined> {
   try {
-    const text = await fs.readFile(metaPath, 'utf8');
-    return JSON.parse(text) as HubVersionRecord;
+    const bytes = await fs.readFile(hubPath);
+    return crypto.createHash('sha256').update(bytes).digest('hex');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined;
     }
     throw err;
   }
+}
+
+/**
+ * Unreadable or structurally invalid metadata is reported as "no active hub"
+ * so the caller falls through to the first-write path and heals it. Throwing
+ * here would wedge hub sync permanently for every plugin on the machine.
+ */
+async function readActiveVersion(
+  metaPath: string
+): Promise<HubVersionRecord | undefined> {
+  let text: string;
+  try {
+    text = await fs.readFile(metaPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw err;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  return asHubVersionRecord(parsed);
+}
+
+function asHubVersionRecord(value: unknown): HubVersionRecord | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Partial<Record<keyof HubVersionRecord, unknown>>;
+  // Only the two fields the election actually reads are required; the rest are
+  // provenance and must not be able to invalidate an otherwise usable record.
+  if (
+    typeof candidate.version !== 'string' ||
+    semver.valid(candidate.version) === null ||
+    typeof candidate.bundleSha256 !== 'string' ||
+    candidate.bundleSha256.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    version: candidate.version,
+    protocolVersion:
+      typeof candidate.protocolVersion === 'number'
+        ? candidate.protocolVersion
+        : AT_SERIES_HUB_PROTOCOL_VERSION,
+    writtenByPluginId:
+      typeof candidate.writtenByPluginId === 'string'
+        ? candidate.writtenByPluginId
+        : 'unknown',
+    writtenByPluginVersion:
+      typeof candidate.writtenByPluginVersion === 'string'
+        ? candidate.writtenByPluginVersion
+        : 'unknown',
+    writtenAt:
+      typeof candidate.writtenAt === 'number' ? candidate.writtenAt : 0,
+    bundleSha256: candidate.bundleSha256
+  };
 }
