@@ -6,6 +6,11 @@ dist/
 *.log
 _boot.py
 
+# Scratch directory written by the AT Terminal plugin's remote-file editor when
+# this repo happens to be the open workspace. Holds plaintext copies of remote
+# files, so it must never be committed.
+.ssh-terminal-manager/
+
 # Local agent plans / working notes (not published).
 # Trailing `*` (not `/`) so git can still descend for the exceptions below.
 docs/superpowers/*
@@ -21,4 +26,3 @@ docs/superpowers/plans/*
 !docs/superpowers/plans/2026-08-13-phase1-hub-outbound-hardening.md
 
 *.tgz
-
