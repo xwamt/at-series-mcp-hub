@@ -483,3 +483,26 @@ hub 的 lockfile 在 P0-T3a 收尾时已随 `5aa74b6`（`build: reinstall depend
 
 **教训（写给后续并行任务，比 2-D 记的那条更强）：** 把 `git add` 与 `git commit` 合并成一条 `&&` 命令**并不足以**消除竞态——真正的根因是 `git commit` 默认提交**整个索引**，而索引是同分支所有 subagent 共享的可变状态。正确做法是**给 `git commit` 也带上 pathspec**（`git commit -m … -- <明确路径>`），这样无论索引里此刻还躺着谁的东西，落地的都只有本任务的文件。本任务 C1/C2 侥幸未出事，只因那两次提交时对方恰好没有暂存内容；C3 出事才暴露出来，此后三次提交（`16b4250` / `2e546a4` / `9f7388a`）全部改用了 pathspec 形式。
 
+### 2026-08-13 · P0-T4b · 补做 P0-T4 遗漏的 p0c e2e 测试标题乱码清理
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series |
+| 动机 | **J11 的收尾**。本条被重新派发时任务书描述的前提已过期：4 个类型错误（TS2741 `:38`、TS2339 `:101`/`:102`/`:120`）**已由 `955046d` 修复并提交**，复跑 `npm run typecheck` 退出码 0、零诊断。但任务书的「顺带处理」项——把 `it(...)` 标题里的乱码字节改成正常可读文本——**P0-T4 并未执行**：`955046d` 把乱码原样提交了进去，只是从残缺 UTF-8 变成了 U+FFFD。本条只补做这一件事 |
+| 代码 diff | `test/mcp/p0c.functional.e2e.test.ts:31` **+1/-1**（单行、纯字符串字面量）：`it('runs Bridge <FFFD>?registry <FFFD>?…')` → `it('runs Bridge -> registry -> health/tools/invoke -> confirm cancel -> installer -> hub sync -> dispose')`，7 处 `<FFFD>?` 全部还原为 ASCII `->`。未触碰任何断言、fixture、类型标注或生产代码 |
+| 契约影响 | 否。未触及 AGENTS.md §2.1 的任何一项，改动是一个测试用例的名字 |
+| 文档 diff | 无 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 **INV-1..INV-6 均未涉及**：改动范围为单个测试文件的一个字符串字面量，`src/**` 零改动，未触及 MCP 配置入口与 `hub.js` 单条 server（INV-1/INV-2）、Hub 工具 registry 与 `GET /tools`（INV-3）、`AT_SERIES_TOOL_DISCOVERY` 与渐进发现阈值（INV-4/INV-5）、五个元工具的暴露与 risk 分级（INV-6） |
+| 验证 | **typecheck：** `npm run typecheck` 退出码 **0、零诊断输出**（改动前后各跑一次，均为 0——本条不修类型，这一步是回归保护）。**测试（沙箱内）：** `35 文件 / 225 用例`，4 失败全部为 `EPERM: operation not permitted, mkdir '/var/folders/.../.cursor'`，与 P0-T3a / P0-T4 / P2-C 记录的同源沙箱限制。**测试（沙箱外，真实结果）：** `Test Files 35 passed (35)`、`Tests 225 passed (225)`，EPERM 全部消失。**目标文件单独复跑：** `npx vitest run test/mcp/p0c.functional.e2e.test.ts --reporter=verbose` 得 `✓ … > runs Bridge -> registry -> health/tools/invoke -> confirm cancel -> installer -> hub sync -> dispose 29ms`，`1 passed (1)`——vitest 打印出的名字即为修复后的文本，是本条改动生效的直接证据。**编码残留：** `rg $'\uFFFD' <file>` **零匹配**；`hexdump` 确认第 31 行已无 `ef bf bd`，行尾 `0d 0a` 保持不变（工作区 CRLF / 索引 LF，`.gitattributes` 按 P0-T1 归一，无换行符 churn）。**类型纪律：** `rg -o '\bany\b' src/ \| wc -l` 仍为 **14**，仍只分布在 `JumpServerSession.ts` / `JumpServerClient.ts` / `JumpServerSftpSession.ts` 三个 JumpServer API 响应边界文件，未新增。**提交范围：** `git show --stat HEAD` 为 `1 file changed, 1 insertion(+), 1 deletion(-)`；提交后 `package.json` / `package-lock.json` 仍为未暂存的 ` M`，未被夹带 |
+| 提交 | at-jumpserver-series `883c9ba`（分支 `chore/at-series-optimization-phase0`，未推送远程） |
+
+**归属判断结论（独立复核，与 P0-T4 一致）：4 个类型错误全部是历史遗留，与「OPTIMIZE-P1 输出体积控制」工作流无关。** 本次不引用 P0-T4 的结论，而是重新取证：`git log --diff-filter=A` 确认文件由 `260236a`（`test: add P0c functional e2e smoke for bridge hub installer flow`）引入；`git show 260236a:test/mcp/p0c.functional.e2e.test.ts` 在引入版本里即可见 `:46` 的 `protocolNames: ['ssh'],` 前后**没有 `zoneName`**（TS2741 的成因）、`:208` 的 `json: (await res.json()) as never`（3 个 TS2339 的成因）。两个缺陷都写在文件的第一版里，不是任何后续工作流改动类型定义所致。**佐证类型定义方向也没变过：** `zoneName` 至今仍是 `src/config/schema.ts:28` 的 `z.string().optional().default('')`——`.optional().default()` 的 **输入**可省略但 **输出**类型是 `string`，而 `CachedJumpServerAsset` 取的是输出类型，故 fixture 必须显式给值。是 fixture 从第一天起就漏字段，不是类型后来收紧。
+
+**为什么乱码在 `955046d` 里「看起来改了」却没被修好。** 该行自 `260236a` 起存的就是残缺字节 `e2 86 3f`——`→`（U+2192 = `e2 86 92`）的前两字节加一个杂散 `?`，本身不是合法 UTF-8。`955046d` 之前有工具把文件重存为合法 UTF-8，把每个非法的 `e2 86` 替换成了 U+FFFD，于是字节从 `e2 86 3f` 变成 `ef bf bd 3f`。`git diff` 因此显示该行有改动，P0-T4 也在台账里如实记了这次字节变化并用它做归属论证，但**只是把变化后的乱码提交了进去，没有还原成可读文本**。本条改用 ASCII `->` 而非补回 U+2192，是为了让这个名字不再依赖 UTF-8 往返的正确性。这一行并非纯装饰：该文件只有一个用例，vitest 输出里这个标题是它唯一的自述。
+
+**P0-T4 记录的两个遗留项现状（一条已闭合，一条为本条本身）。** P0-T4 的「顺带发现」称 `test/docs/JumpServerMcpDocs.test.ts` 未跟踪且有 2 条文案漂移断言失败，需另行裁决——现已闭合：该文件已被跟踪（`git ls-files test/docs/` 有输出），漂移由 `bc19450`（`fix(docs): point the Continue sample config at the AT Series hub`）解决，本次沙箱外复跑该文件 `✓ 4 tests`。另一项即标题乱码，由本条完成。**至此 jumpserver 在阶段 0 的 J11 无剩余项。**
+
+**一处刻意未动（如实记录）。** `955046d` 给 fixture 填的是 `zoneName: 'default'`，而同一 fixture 的 `nodePath: ['Default']`；生产侧 `normalizeJumpServerAsset` 的算法是 `zoneName: zoneName || nodePath.at(-1) || ''`，即一个没有显式 zone 的真实资产在此 nodePath 下会得到 **`'Default'`**（大写 D）。故 `'default'` 与本 fixture 的 `nodePath` 严格说不自洽。未改动的理由：该值不参与本测试的任何断言（`listCachedAssets` 返回空数组，断言只覆盖 15 个工具名、`USER_CANCELLED` 与 installer 行为），`'default'` 作为「zone 恰好就叫 default 的资产」也完全合法，为此改动一个已提交且通过的 fixture 属无收益 churn。记录在此以备将来有人以该 fixture 为样板推断 `zoneName` 与 `nodePath` 的关系。
+
