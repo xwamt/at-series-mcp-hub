@@ -48,6 +48,8 @@ import {
   ensureAtSeriesMcpConfig,
   defaultAutoApproveToolNames,
   hubJsPath,
+  createBridgeToken,
+  timingSafeEqualToken,
   AT_SERIES_PROTOCOL_VERSION,
   type BridgeRegistryRecord,
   type ToolCatalogEntry
@@ -68,9 +70,9 @@ You still **implement your own** Bridge HTTP server. This package does not ship 
 
 | Field | Example | Rules |
 |-------|---------|-------|
-| `pluginId` | `at.example` | reverse-domain, stable forever |
-| tool name prefix | `example_` | required for new plugins |
-| `hostApp` | `cursor` / `joycode-editor` | use `detectHostApp()` from `@at-series/mcp-hub` (path-derived; not an IDE allowlist) |
+| `pluginId` | `at.example` | reverse-domain, stable forever; MUST match `^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$` or the Hub skips your record |
+| tool name prefix | `example_` | required for new plugins; every tool name MUST match `^[a-z][a-z0-9_]*$` |
+| `hostApp` | `cursor` / `joycode-editor` | use `detectHostApp()` from `@at-series/mcp-hub` (path-derived; not an IDE allowlist). MUST match `^[a-z0-9][a-z0-9._-]{0,63}$` — `detectHostApp` output always does |
 
 ### 2. Define tools with risk
 
@@ -105,6 +107,19 @@ Risk mapping:
 ### 3. Implement Bridge endpoints
 
 Auth header: `x-at-series-token: <token>`
+
+Mint the token once per Bridge process and compare it in constant time. Do **not** use `===` — it short-circuits at the first differing character, so the comparison duration reveals how much of a guess was correct (protocol §7.2):
+
+```ts
+const token = createBridgeToken(); // 43-char base64url, 32 bytes of entropy
+
+function isAuthorized(headers: http.IncomingHttpHeaders): boolean {
+  const received = headers['x-at-series-token'];
+  return typeof received === 'string' && timingSafeEqualToken(received, token);
+}
+```
+
+`timingSafeEqualToken` returns `false` on a length mismatch instead of throwing, so it is safe to call directly on an arbitrary request header.
 
 #### `GET /health` -> 200
 
@@ -147,7 +162,10 @@ Minimum fields: see protocol section 5.
 Use `FsBridgePublisher` from `@at-series/mcp-hub`:
 
 ```ts
-const bridgeId = crypto.randomUUID(); // MUST be a UUID (protocol §4.3)
+// MUST be a UUID and MUST match ^[a-z0-9][a-z0-9._-]{0,63}$ (protocol §4.3).
+// `randomUUID()` satisfies both; do not upper-case it and do not substitute a
+// user-supplied string — the path helpers throw rather than resolve one.
+const bridgeId = crypto.randomUUID();
 
 const publisher = new FsBridgePublisher({
   bridgeId,
@@ -161,8 +179,8 @@ const record: BridgeRegistryRecord = {
   pluginDisplayName: 'AT Example',
   pluginVersion: '1.2.3',
   hostApp: 'cursor',
-  port: 43123,
-  token: '<high-entropy-secret>', // never log in plaintext
+  port: 43123, // integer 1..65535; publish the real `listen()` port
+  token, // from createBridgeToken(); never log in plaintext
   pid: process.pid,
   updatedAt: Date.now(),
   tools: tools as ToolCatalogEntry[]
@@ -265,6 +283,8 @@ Migrate away:
 | Symptom | Likely cause |
 |---------|----------------|
 | No tools except `at_list_providers` | Bridge not published, wrong hostApp, or unhealthy Bridge |
+| Your Bridge is published but never health-checked | The record was rejected at parse time: non-integer or out-of-range `port`, a non-conforming `pluginId` or tool name, or an `endpoints` override outside `^\/[A-Za-z0-9._~\-\/]*$` (protocol §4.2, §4.4, §5.2) |
+| `publish()` throws `Invalid bridgeId` / `Invalid hostApp` | The value is not a single path segment. Use `randomUUID()` and `detectHostApp()` (protocol §4.1, §4.3) |
 | Tools missing after IDE switch | `AT_SERIES_HOST_APP` mismatch |
 | MODULE_NOT_FOUND on MCP start | Config still points at old extension path instead of `~/.at-series/mcp/hub.js` |
 | Duplicate/conflict tools | Another plugin reused your tool names |
