@@ -70,7 +70,7 @@ You still **implement your own** Bridge HTTP server. This package does not ship 
 |-------|---------|-------|
 | `pluginId` | `at.example` | reverse-domain, stable forever |
 | tool name prefix | `example_` | required for new plugins |
-| `hostApp` | `cursor` | detect current IDE product |
+| `hostApp` | `cursor` / `joycode-editor` | use `detectHostApp()` from `@at-series/mcp-hub` (path-derived; not an IDE allowlist) |
 
 ### 2. Define tools with risk
 

@@ -94,7 +94,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | D21 | 目录 | 统一 `~/.at-series/`（mcp + bridges） |
 | D22 | 卸载默认行为 | deactivate **只删自己的 bridge**；不删 hub.js / 不删 MCP 配置 |
 | D23 | 显式清理 | 提供 Repair / Uninstall MCP Config 命令 |
-| D24 | IDE 隔离 | 按 **`hostApp`** 隔离；MCP env：`AT_SERIES_HOST_APP` |
+| D24 | IDE 隔离 | 按 **`hostApp`** 隔离；MCP env：`AT_SERIES_HOST_APP`；探测用 `detectHostApp`（路径派生，禁止未识别 IDE 共用 `unknown`） |
 | D25 | 无 hostApp 老数据 | v1 **忽略** |
 | D26 | 包边界 v1 | **单一包**：协议 + 注册表 + Hub 运行时 + publisher helper + **MCP config installer helper**；**不含**业务与通用 Bridge HTTP 框架（插件各自实现 Bridge） |
 | D27 | 安全基线 | 127.0.0.1、高熵 token、权限收紧、不落 token 日志；v1 不做轮转/签名 |

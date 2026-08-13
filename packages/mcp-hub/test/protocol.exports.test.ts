@@ -6,7 +6,8 @@ import {
   HUB_BUILTIN_TOOL_NAMES,
   MCP_SERVER_DISPLAY_NAME,
   normalizeToolRisk,
-  isAutoApproveRisk
+  isAutoApproveRisk,
+  detectHostApp
 } from '../src/index';
 
 describe('protocol exports', () => {
@@ -32,5 +33,13 @@ describe('protocol exports', () => {
   it('treats missing risk as exec (fail closed)', () => {
     expect(normalizeToolRisk(undefined)).toBe('exec');
     expect(isAutoApproveRisk(normalizeToolRisk(undefined))).toBe(false);
+  });
+
+  it('exports detectHostApp for plugin host isolation', () => {
+    expect(
+      detectHostApp({
+        extensionPath: 'C:/Users/alan/.joycode-editor/extensions/local.at-terminal-0.3.0'
+      })
+    ).toBe('joycode-editor');
   });
 });

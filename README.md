@@ -108,13 +108,18 @@ import {
   syncHubBundle,
   ensureAtSeriesMcpConfig,
   hubJsPath,
+  detectHostApp,
   AT_SERIES_PROTOCOL_VERSION, // Bridge wire = 1
   type BridgeRegistryRecord,
   type ToolCatalogEntry
 } from '@at-series/mcp-hub';
 
 const bridgeId = crypto.randomUUID();
-const hostApp = 'cursor';
+const hostApp = detectHostApp({
+  appName: 'Cursor',
+  uriScheme: 'cursor',
+  extensionPath: 'C:/Users/you/.cursor/extensions/local.at-example-1.0.0'
+});
 const tools: ToolCatalogEntry[] = [
   {
     name: 'example_ping',

@@ -84,6 +84,12 @@ export type HostApp =
   | 'unknown'
   | (string & {});
 
+export {
+  detectHostApp,
+  slugifyHostAppId,
+  type DetectHostAppInput
+} from './detectHostApp';
+
 export type ToolRisk = 'read' | 'write' | 'exec';
 
 export type BridgeErrorCode =
