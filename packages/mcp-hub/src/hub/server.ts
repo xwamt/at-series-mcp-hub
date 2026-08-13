@@ -32,6 +32,7 @@ import {
   buildListProvidersResult,
   type UnhealthyBridgeInput
 } from './listProviders';
+import { describeError, hubLog } from './logger';
 import {
   buildToolsByPluginId,
   computeExposedBusinessTools,
@@ -356,7 +357,14 @@ export async function createHubRuntime(options: {
         try {
           while (refreshQueued) {
             refreshQueued = false;
-            result = await refreshCatalogOnce();
+            try {
+              result = await refreshCatalogOnce();
+            } catch (err) {
+              // A broken registry read must not kill the Hub process. Keep the
+              // previous catalog so already-discovered tools stay routable.
+              hubLog.error(`catalog refresh failed: ${describeError(err)}`);
+              result = { ...catalog, providers: providersResult };
+            }
           }
           return result;
         } finally {
@@ -593,22 +601,33 @@ export async function createHubRuntime(options: {
   // Establish fingerprint baseline before watch/timers so startup is quiet.
   await refreshCatalog();
 
-  registryWatch = watchBridgeRegistry({
-    hostApp: options.hostApp,
-    home: options.home,
-    onChange: () => {
-      if (closed) {
-        return;
+  try {
+    registryWatch = watchBridgeRegistry({
+      hostApp: options.hostApp,
+      home: options.home,
+      onChange: () => {
+        if (closed) {
+          return;
+        }
+        void refreshCatalog().catch((err) => {
+          hubLog.error(`registry watch refresh failed: ${describeError(err)}`);
+        });
       }
-      void refreshCatalog();
-    }
-  });
+    });
+  } catch (err) {
+    // Installing the watch touches the filesystem too, so the same broken
+    // registry path that fails a read can fail here. The health timer below
+    // still drives refreshes; losing live change events is not fatal.
+    hubLog.error(`registry watch unavailable: ${describeError(err)}`);
+  }
 
   healthTimer = setInterval(() => {
     if (closed) {
       return;
     }
-    void refreshCatalog();
+    void refreshCatalog().catch((err) => {
+      hubLog.error(`scheduled refresh failed: ${describeError(err)}`);
+    });
   }, HEALTH_REFRESH_INTERVAL_MS);
   // Allow process exit while the timer is the only live handle (tests / short runs).
   healthTimer.unref?.();

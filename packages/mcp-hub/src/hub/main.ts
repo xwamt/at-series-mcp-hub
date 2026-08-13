@@ -80,6 +80,21 @@ async function main(): Promise<void> {
   });
 }
 
+// Deliberately non-fatal: the Hub is a long-lived IDE child process, so one
+// transient error must not make every AT Series tool disappear from the IDE.
+// Genuinely fatal startup failures are still handled by main().catch below.
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(
+    `[at-series-hub] error: unhandled rejection: ${String(reason)}\n`
+  );
+});
+
+process.on('uncaughtException', (err) => {
+  process.stderr.write(
+    `[at-series-hub] error: uncaught exception: ${err.message}\n`
+  );
+});
+
 main().catch((err) => {
   console.error(err);
   process.exit(1);
