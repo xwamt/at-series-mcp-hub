@@ -132,6 +132,29 @@
 
 **顺带发现（记录不处理）：** `npm pack` 产物含 `dist/hub.js.map` **1.4 MB**，比 `dist/hub.js`（786 KB）还大，随包分发到三个插件。属审计的 P2-6，留待阶段 2 处理，不阻塞 0.2.2。
 
+### 2026-08-13 · P0-T5b · 修正 .gitignore 的 CRLF 空模式并补齐缺失规则
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-terminal-series、at-series-mcp-hub |
+| 动机 | P0-T5 执行中发现：此前「三仓已忽略 `.ssh-terminal-manager/`」的结论是 `git check-ignore` 假阳性，四仓实际一个都没有 |
+| 代码 diff | `at-terminal-series/.gitignore` +4（新增规则）；`at-series-mcp-hub/.gitignore` 全文 CRLF → LF 并新增规则（+28/-24） |
+| 契约影响 | 否 |
+| 文档 diff | 无 |
+| protocolVersion | 不变 |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及 |
+| 验证 | 对照实验：不存在的路径 `zzz-not-ignored-xyz/` 在修正前于 terminal/jumpserver/hub 三仓均被报「已忽略」（匹配到空模式），grafana（LF）正确报未忽略；修正后四仓一致报未忽略，同时真规则 `.ssh-terminal-manager/` 在四仓均正确命中（terminal:59、jumpserver:23、hub:12、grafana:23） |
+| 提交 | at-terminal-series `330ac81`、at-series-mcp-hub `6d523e9` |
+
+**根因：** git 解析 `.gitignore` 时先判定「本行非空」、之后才剥掉行尾 `\r`，于是 CRLF 文件里的每个空行都变成一条**空模式**，而空模式会匹配任何带尾斜杠的查询路径。
+
+**影响面：** 仅影响 `git check-ignore <path>/` 形式的验证结论；`git status` / `git add` 的目录遍历不受影响，**没有文件被误藏或误提交**。但它足以让人对忽略规则的存在性做出错误判断——本轮就发生了一次。
+
+**教训（写给后续任务）：** 用 `git check-ignore` 验证忽略规则时，**必须先用一个不存在的路径做对照实验**，或直接 `grep` `.gitignore` 确认规则文本存在，不要只看 `check-ignore` 的返回。
+
+**遗留：** `at-jumpserver-series/.gitignore` 工作区仍是 CRLF，但其索引已因 P0-T1 的 `.gitattributes` 归一为 LF，clone 出来是干净的；本地表现将在下次触碰该文件时自动消除。
+
 ### 2026-08-13 · P0-T5 · 补 .gitignore 缺口并清理已跟踪的 bridge 测试残留
 
 | 字段 | 内容 |
