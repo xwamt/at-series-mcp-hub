@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema
 } from '@modelcontextprotocol/sdk/types.js';
 import { AT_SERIES_HOST_APP_ENV, MCP_SERVER_DISPLAY_NAME } from '../protocol/index';
+import { toMcpToolDescriptors } from './annotations';
 import { createHubRuntime } from './server';
 
 declare const __HUB_VERSION__: string;
@@ -44,15 +45,7 @@ async function main(): Promise<void> {
   });
 
   mcpServer.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = await runtime.listToolsForMcp();
-    return {
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        title: tool.title,
-        description: tool.description,
-        inputSchema: tool.inputSchema
-      }))
-    };
+    return { tools: toMcpToolDescriptors(await runtime.listToolsForMcp()) };
   });
 
   mcpServer.server.setRequestHandler(CallToolRequestSchema, async (request) => {
