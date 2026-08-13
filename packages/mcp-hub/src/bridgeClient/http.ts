@@ -1,6 +1,11 @@
 /**
  * Hub → Bridge HTTP client (outbound only).
  *
+ * Redirects are refused (`redirect: 'error'`). The Bridge protocol has no
+ * legal 3xx, and fetch only strips `Authorization` across origins — a custom
+ * header like `x-at-series-token` would be forwarded verbatim, handing the
+ * token and the full tool arguments to whoever controls the Location.
+ *
  * Error-handling choice:
  * - bridgeGetHealth / bridgeGetTools: throw BridgeHttpError on non-2xx
  *   (or unparseable body), including UNAUTHORIZED. Used for liveness /
@@ -107,6 +112,7 @@ export async function bridgeGetHealth(
     res = await fetch(url, {
       method: 'GET',
       headers: authHeaders(record.token),
+      redirect: 'error',
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
     });
   } catch (err) {
@@ -140,7 +146,8 @@ export async function bridgeGetTools(
   try {
     res = await fetch(url, {
       method: 'GET',
-      headers: authHeaders(record.token)
+      headers: authHeaders(record.token),
+      redirect: 'error'
     });
   } catch (err) {
     const message =
@@ -182,6 +189,7 @@ export async function bridgeInvoke(
         ...authHeaders(record.token),
         'Content-Type': 'application/json; charset=utf-8'
       },
+      redirect: 'error',
       body: JSON.stringify(req)
     });
   } catch (err) {

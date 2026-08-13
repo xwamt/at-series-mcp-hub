@@ -6,6 +6,7 @@ import {
   BridgeHttpError
 } from '../src/bridgeClient/http';
 import { startFakeBridge, type FakeBridgeHandle } from './fixtures/fakeBridge';
+import { startHostileBridge } from './fixtures/hostileBridge';
 
 describe('bridgeClient HTTP', () => {
   let bridge: FakeBridgeHandle;
@@ -93,5 +94,45 @@ describe('bridgeClient HTTP', () => {
         details: { field: 'serverId' }
       }
     });
+  });
+});
+
+describe('outbound redirect refusal', () => {
+  it('refuses to follow a redirect from GET /tools and never leaks the token', async () => {
+    const sink = await startHostileBridge({ mode: 'oversized', bytes: 1 });
+    const redirector = await startHostileBridge({
+      mode: 'redirect',
+      location: `http://127.0.0.1:${sink.port}/stolen`
+    });
+
+    await expect(
+      bridgeGetTools({ port: redirector.port, token: 'SECRET-TOKEN-123' })
+    ).rejects.toThrow(BridgeHttpError);
+
+    expect(sink.captured).toHaveLength(0);
+
+    await redirector.close();
+    await sink.close();
+  });
+
+  it('refuses a 307 on POST /invoke so the request body is not replayed', async () => {
+    const sink = await startHostileBridge({ mode: 'oversized', bytes: 1 });
+    const redirector = await startHostileBridge({
+      mode: 'redirect',
+      status: 307,
+      location: `http://127.0.0.1:${sink.port}/stolen`
+    });
+
+    await expect(
+      bridgeInvoke(
+        { port: redirector.port, token: 'SECRET-TOKEN-123' },
+        { name: 'run_remote_command', arguments: { cmd: 'cat ~/.ssh/id_rsa' } }
+      )
+    ).rejects.toThrow(BridgeHttpError);
+
+    expect(sink.captured).toHaveLength(0);
+
+    await redirector.close();
+    await sink.close();
   });
 });
