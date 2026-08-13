@@ -714,3 +714,22 @@ AssertionError: expected { …(2) } to deeply equal { secondWrite: 'BLOCKED', pr
 **并发协作说明：五次提交全部带 pathspec，未夹带他人在制品。** 本工作区同时有多个 agent 在同一分支上活动，`git commit` 默认提交整个索引（P2-C 的教训，台账 L484）。本任务的每一次 `git add` 与 `git commit` 都带明确路径列表，且每次提交后立即 `git show --stat HEAD` 复核文件数（15 / 12 / 7 / 4 / 4，与预期逐一相符）。全程 `package.json`、`package-lock.json`、`docs/releases/0.3.0.md` 三个他人修改的文件保持未暂存状态，`docs/handoffs/` 保持未跟踪。本条台账写入 at-series-mcp-hub 仓时同样带 pathspec——该仓当时有他人未提交的 `packages/mcp-hub/src/installer/cursor.ts` 等三个文件在索引外，未被波及。
 
 **但台账本身出过一次顺序事故，如实记录。** 本条初次写入（`cdfdb57`）时，编辑基于的是**追加 OPS-1 之前**的文件快照，于是 P4-T 被插到了 OPS-1 **上方**，违反本台账「正序，越新越靠下」的约定。提交后立刻复核 `git show --stat` 发现 `81 insertions(+), 23 deletions(-)` 里那 23 行删除可疑，逐行取证后确认：**OPS-1 的内容一行未丢**，只是位置被顶到了下面，另外那 23 行由 LF 归一为 CRLF（该文件在仓库里本就是 CRLF——`HEAD~1` 的 654 行中 631 行带 `\r`，OPS-1 那 23 行是唯一的 LF 例外，故这次归一是让它与全文一致，不是回归）。随后用一次**纯重排**修正顺序：`diff <(去空行|sort) <(去空行|sort)` 对重排前后两个版本返回 0，即非空行内容的多重集完全一致，只有位置变化。**教训与 pathspec 那条同源**：共享可变状态不只是 `.git/index`，**同一个被多方追加的文件也是**；对这类文件的编辑必须在写入前重新读取尾部，而不是复用几分钟前的快照。
+
+### 2026-08-13 · OPS-2 · 闭合 hubSync 夹具漂移的第三处（terminal）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-terminal-series |
+| 动机 | P4-T 取证后转交的遗留：`test/mcp/hubSync.test.ts` 的 `skips overwrite when active hub semver is newer` 失败。根因是 P2-A 的 `2138209`（H4：no-op 前校验磁盘 `hub.js` 真实哈希），夹具写死占位摘要 `abc`，新语义下被判为「安装已被篡改」而走修复路径，与用例标题所述的 semver 跳过路径不符 |
+| 代码 diff | `test/mcp/hubSync.test.ts` +8/-2：补 `createHash` 导入；`bundleSha256` 由字面量 `abc` 改为现算 `sha256(activeContent)`，并加注释说明为何不能用占位值 |
+| 契约影响 | 否（仅测试夹具） |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否——三仓至此已全部闭合 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及 |
+| 验证 | 修复前沙箱外 `Tests 1 failed \| 420 passed (421)`；修复后 `Test Files 61 passed (61)` / `Tests 421 passed (421)`，typecheck 零诊断 |
+| 提交 | `c07b58b`（1 文件），分支 `chore/at-series-optimization-phase0`，未推送 |
+
+**这是同一条漂移在三个仓库的第三次出现**，前两次分别由 P3-J 的 `d22ea5c`（jumpserver）与 P3-G 的 `6c5ae80`（grafana）修复。三处修法一致：由 `activeContent` 现算摘要，而非硬编码。
+
+**值得记下的模式：** 一个 hub 侧的契约收紧（H4 要求记录必须如实描述磁盘字节）会让**每个**下游仓里「伪造 hub-version.json 但不配套 hub.js」的夹具同时失效。这类夹具本质是在断言契约的反面，收紧后暴露出来是好事；但因为三仓各自跑在陈旧 dist 上（见 OPS-1），暴露时间被推迟且分散成了三次独立排查。**下次改动 hub 的文件系统契约时，应主动 grep 三个插件仓的 `bundleSha256` / `hub-version` 夹具，一次性同步。**
