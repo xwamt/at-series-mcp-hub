@@ -47,7 +47,23 @@
 | protocolVersion | 不变（Bridge 1 / Hub 2） |
 | 插件需跟改 | 否 |
 | 核心不变量 | INV-1..INV-6 已在总纲中定义并冻结 |
-| 验证 | 无需运行 |
-| 提交 | 待提交 |
+| 验证 | `git check-ignore` 逐条确认白名单只放行本轮 4 个文件，未波及既有 plans/specs |
+| 提交 | `9044141`（分支 `chore/at-series-optimization-phase0`） |
 
 <!-- 新条目追加到本行以下，保持时间倒序或正序需全程一致：本台账采用正序（越新越靠下） -->
+
+### 2026-08-13 · P0-T1 · 三仓补齐 .gitattributes，冻结换行策略
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-terminal-series、at-jumpserver-series、at-series-mcp-hub |
+| 动机 | X3：CRLF/LF 噪声淹没真实改动，terminal 仓 158 个文件变更中仅 20 个为真 |
+| 代码 diff | 三仓各新增 `.gitattributes`（21 行，内容与 at-grafana-series 一致） |
+| 契约影响 | 否 |
+| 文档 diff | 无 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 已核对 INV-1..INV-6 均未涉及（纯仓库配置，不触及代码与协议） |
+| 验证 | `cmp` 确认三份文件与 at-grafana-series 模板逐字节一致；`git check-attr text eol` 输出：at-terminal-series `src/extension.ts: text: auto` / `src/extension.ts: eol: lf`，at-jumpserver-series `src/extension.ts: text: auto` / `src/extension.ts: eol: lf`，at-series-mcp-hub `packages/mcp-hub/src/index.ts: text: auto` / `packages/mcp-hub/src/index.ts: eol: lf`；`git show --stat HEAD` 三仓均为 `1 file changed, 20 insertions(+)`；`git show HEAD:.gitattributes` 三仓 blob 均不含 CR |
+| 提交 | at-terminal-series `c19bff1`、at-jumpserver-series `c903f46`、at-series-mcp-hub `652a00f`（均在分支 `chore/at-series-optimization-phase0`） |
+
