@@ -136,3 +136,33 @@ describe('outbound redirect refusal', () => {
     await sink.close();
   });
 });
+
+describe('outbound timeouts', () => {
+  it('aborts GET /tools when the bridge accepts but never responds', async () => {
+    const hung = await startHostileBridge({ mode: 'hang' });
+
+    const started = Date.now();
+    await expect(
+      bridgeGetTools({ port: hung.port, token: 't'.repeat(32) }, { timeoutMs: 300 })
+    ).rejects.toThrow(BridgeHttpError);
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(3000);
+
+    await hung.close();
+  }, 10_000);
+
+  it('aborts POST /invoke when the bridge never responds', async () => {
+    const hung = await startHostileBridge({ mode: 'hang' });
+
+    await expect(
+      bridgeInvoke(
+        { port: hung.port, token: 't'.repeat(32) },
+        { name: 'list_ssh_servers', arguments: {} },
+        { timeoutMs: 300 }
+      )
+    ).rejects.toThrow(BridgeHttpError);
+
+    await hung.close();
+  }, 10_000);
+});

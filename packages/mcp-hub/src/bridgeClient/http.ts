@@ -34,6 +34,19 @@ export type BridgeClientRecord = Pick<
 >;
 
 const HEALTH_TIMEOUT_MS = 2000;
+/** Catalog fetch is on the hot path of every tools/list; fail fast. */
+const TOOLS_TIMEOUT_MS = 5000;
+/**
+ * Invoke can legitimately block on a human confirmation dialog in the
+ * extension host, so this ceiling is generous. It exists to bound a wedged
+ * bridge, not to police slow tools.
+ */
+const INVOKE_TIMEOUT_MS = 120_000;
+
+export type BridgeRequestOptions = {
+  /** Override the default abort timeout, in milliseconds. */
+  timeoutMs?: number;
+};
 
 export class BridgeHttpError extends Error {
   readonly code: string;
@@ -103,7 +116,8 @@ function throwFromErrorBody(
 }
 
 export async function bridgeGetHealth(
-  record: BridgeClientRecord
+  record: BridgeClientRecord,
+  options: BridgeRequestOptions = {}
 ): Promise<BridgeHealthResponse> {
   const endpoints = resolveBridgeEndpoints(record);
   const url = `${bridgeBaseUrl(record.port)}${endpoints.health}`;
@@ -113,7 +127,7 @@ export async function bridgeGetHealth(
       method: 'GET',
       headers: authHeaders(record.token),
       redirect: 'error',
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(options.timeoutMs ?? HEALTH_TIMEOUT_MS)
     });
   } catch (err) {
     const message =
@@ -138,7 +152,8 @@ export async function bridgeGetHealth(
 }
 
 export async function bridgeGetTools(
-  record: BridgeClientRecord
+  record: BridgeClientRecord,
+  options: BridgeRequestOptions = {}
 ): Promise<BridgeToolsResponse> {
   const endpoints = resolveBridgeEndpoints(record);
   const url = `${bridgeBaseUrl(record.port)}${endpoints.tools}`;
@@ -147,7 +162,8 @@ export async function bridgeGetTools(
     res = await fetch(url, {
       method: 'GET',
       headers: authHeaders(record.token),
-      redirect: 'error'
+      redirect: 'error',
+      signal: AbortSignal.timeout(options.timeoutMs ?? TOOLS_TIMEOUT_MS)
     });
   } catch (err) {
     const message =
@@ -177,7 +193,8 @@ export async function bridgeGetTools(
 
 export async function bridgeInvoke(
   record: BridgeClientRecord,
-  req: BridgeInvokeRequest
+  req: BridgeInvokeRequest,
+  options: BridgeRequestOptions = {}
 ): Promise<BridgeInvokeResponse> {
   const endpoints = resolveBridgeEndpoints(record);
   const url = `${bridgeBaseUrl(record.port)}${endpoints.invoke}`;
@@ -190,6 +207,7 @@ export async function bridgeInvoke(
         'Content-Type': 'application/json; charset=utf-8'
       },
       redirect: 'error',
+      signal: AbortSignal.timeout(options.timeoutMs ?? INVOKE_TIMEOUT_MS),
       body: JSON.stringify(req)
     });
   } catch (err) {

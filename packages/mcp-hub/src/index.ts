@@ -32,7 +32,8 @@ export {
   bridgeGetHealth,
   bridgeGetTools,
   bridgeInvoke,
-  type BridgeClientRecord
+  type BridgeClientRecord,
+  type BridgeRequestOptions
 } from './bridgeClient/http';
 
 // --- hub runtime / aggregation ---
