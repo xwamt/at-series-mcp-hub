@@ -629,3 +629,26 @@ Received 里可以直接读到：标题只有 `prod-db`（**无地址**），正
 **本次刻意未做：按数据源类型的端点白名单。** 即「Prometheus 放行哪些路径、Loki 放行哪些路径」。路径限定解决的是「不能跑出 datasource 的代理子树」，但**子树之内**某个数据源自身暴露了什么，本次并未穷举——例如某些数据源的管理端点也挂在同一子树下。这需要产品决策（放行清单一旦写死，新版本 Prometheus/Loki 的新端点就会被误拒），超出本任务范围，已写进 ADR-004 作为下一步收紧项，并在 `afc1e14` 的提交信息正文中点出。
 
 **G2 的 webview 侧是怎么确认没漏的。** 先做静态穷举：`rg '/instances/|iframeSrc|buildDashboardUrl|buildAlertRuleUrl' src/` 显示对外 URL 只有两个生产者（`buildDashboardUrl` / `buildAlertRuleUrl`），两个消费者（`DashboardPanel.ts:71` / `AlertDetailPanel.ts:64`）都只是把它们的返回值原样交给 `renderEmbedWebviewHtml` 的 `iframeSrc`，而 `html.ts` 里 `proxyOrigin` 只参与 CSP 的 `frame-src`（origin 级匹配，路径变长不影响）与 `buildEmbedWebviewOptions` 的 `portMapping`（只取端口）。因此把 token 收进 `requireEmbedBase()` 这一个私有方法后，两个面板**无需任何改动**即自动带上 token。但「无需改动」正是最容易出事的形态，而两个面板的既有单测用的都是 **fake proxy**（`buildDashboardUrl: vi.fn(...)` 返回硬编码 URL），根本不会察觉真实 URL 形态变化。故补了上文那条端到端用例，并用变异验证确认它确有鉴别力。
+
+### 2026-08-13 · OPS-1 · 陈旧 hub `dist/` 会静默让插件测试结果失真（流程缺口，已确认 CI 无此问题）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | 全部 4 个（本条为流程记录，无代码改动） |
+| 动机 | P3-G 执行中发现：`at-grafana-series` 里 `require('@at-series/mcp-hub').timingSafeEqualToken` 返回 `undefined`，尽管该函数早在 P2-C 的 `16b4250` 就已实现并导出 |
+| 代码 diff | 无。仅重新执行 `npm run build && npm run build:hub` |
+| 契约影响 | 否 |
+| 文档 diff | 本条目 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | 否 |
+| 核心不变量 | 不涉及 |
+| 验证 | 重建 dist 后确认 `timingSafeEqualToken` / `createBridgeToken` / `detectHostApp` 三个导出均为 `function`（此前 `timingSafeEqualToken` 为 `undefined`）；三仓链接版本均由陈旧产物变为 **0.3.0**。重建后复跑：grafana **324/324**、jumpserver **261/261**、hub **346/346**，typecheck 三仓零诊断 |
+| 提交 | 无代码提交（`dist/` 被 gitignore） |
+
+**根因：** 三个插件通过 `file:../at-series-mcp-hub/packages/mcp-hub` 依赖 hub，Node 解析到的是**构建产物** `dist/`，而不是 `src/`。`dist/` 被 gitignore 且没有任何机制保证它与 `src/` 同步，于是 hub 源码更新后，插件侧仍在对着旧产物跑测试。这正是 P0-T3 台账中记录的「构建顺序依赖」代价的具体表现。
+
+**危害在于它是静默的。** 插件测试照常全绿，但绿的是过时的行为。本轮有**三个并行任务各自独立撞上它**：P3-G 发现 `timingSafeEqualToken` 不存在；P3-J 的 `d22ea5c` 与 P3-G 的 `6c5ae80` 各自修了同一条 `hubSync.test.ts` 夹具——该夹具写死占位摘要 `'abc'`，在 P2-A 的 `2138209`（no-op 前校验磁盘 `hub.js` 真实哈希）落地后语义已变，但因为两仓都跑在旧 dist 上，这条漂移对谁都不可见。
+
+**CI 没有这个问题（已核实）。** 三个插件的 `.github/workflows/ci.yml` 均先 `actions/checkout` 出 `xwamt/at-series-mcp-hub`，执行 `npm ci` → `npm run build` → `npm run build:hub`，然后才安装插件依赖。因此**门禁是可信的**，缺口只存在于本地开发。
+
+**未做的加固（有意留作后续项）：** 可以给三个插件加一个 `pretest` 守卫，在链接的 hub `dist/` 缺失或早于其 `src/` 时快速失败并打印重建命令。本次没做，原因有二：一是 `pretest` 去构建一个兄弟仓属于意外耦合，且将来若切回 npm 依赖会失效；二是当时 `at-terminal-series` 有并行 agent 在改动，同时向三仓加脚本的冲突风险不划算。**在此之前，本地跑插件测试前请先在 hub 仓执行 `npm run build && npm run build:hub`。**
