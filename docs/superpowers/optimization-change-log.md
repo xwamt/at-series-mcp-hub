@@ -525,3 +525,80 @@ hub 的 lockfile 在 P0-T3a 收尾时已随 `5aa74b6`（`build: reinstall depend
 **为什么把 `backupOnce` 提到 `fs/atomicWrite.ts` 而不是从 `jsonConfigFile.ts` 导出。** 后者的名字与职责都是 JSON 文档的读写，而 Continue 的配置是 YAML；从一个 JSON 专属模块里 import 备份能力，会让下一个读代码的人以为 Continue 也走了 JSON 路径。备份本身与文件格式无关，和 `atomicWriteFile` 一样是文件系统原语，放在一起也便于将来第三种配置格式复用。
 
 **`withMcpConfigLock` 的名字保留未改。** 它定义在 `jsonConfigFile.ts` 里，但参数只是一个 configPath、语义是「串行化对某个 IDE MCP 配置的读-改-写」，对 YAML 同样成立，故直接复用而未另造一个 `withContinueConfigLock`。若将来 `jsonConfigFile.ts` 继续膨胀，可以把锁与备份一起下沉到 `installer/configFile.ts`。
+
+### 2026-08-13 · P3-J · JumpServer 可写面收敛：同源断言、TLS dispatcher、connectionKey 透传、命令截断
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-jumpserver-series |
+| 动机 | **J1**（明文密码可被 POST 到任意主机）：`tryWarmupKokoConnectPage` 把服务端 `Location` 响应头**原样**当作登录地址，随后向它 POST 堡垒机的用户名与密码；`:400-406` 的 5 跳重定向循环逐跳同样信任。而 `request()` 对绝对 URL 零校验（`pathOrUrl.startsWith('http') ? pathOrUrl : origin + pathOrUrl`）。被入侵的 JumpServer、被投毒的 DNS、或 `baseUrl` 为 `http://` 时的中间人，只需回一句 `302 Location: https://evil/login/` 就能拿到**通往全部内网资产的那一把钥匙**。**J2**（cookie jar 无域隔离）：jar 是扁平 `Map<name,value>`，`captureCookies` 丢弃 `Domain`/`Path`/`Secure`，`request()` 对任意 URL 无条件带上整个 jar——与 J1 复合后 `sessionid`/`csrftoken` 一并泄漏。**J3**（`verifyTls` 只接到 WebSocket）：`ws` 侧正确传了 `rejectUnauthorized`，REST 侧却是 `fetchImpl = fetchImpl ?? fetch`，全局 fetch 无 dispatcher。两个方向都坏：勾掉 "Verify TLS" 后 WS 通而 REST 全挂，用户的下一步通常是 `NODE_TLS_REJECT_UNAUTHORIZED=0`（关掉**整个扩展宿主**的证书校验）；不勾则该复选框给出一个 REST 侧并不存在的安全预期。**J4**（`connectionKey` 被静默忽略）：manager 的 `listDirectory`/`mkdir`/`rename`/`deleteEntry` 签名里根本没有该参数，而紧邻的 `stat`/`readFile`/`writeFile`/`createFile` 都有——是遗漏而非设计。AI 明确指定 `connectionKey=生产库` 删文件，实际删在「当前活动」连接上（可能是另一台主机），确认弹窗只显示路径、不显示资产名，用户无从察觉。**J5**（确认弹窗无截断、无危险识别）：`:94` 把命令原文直接拼进模态框不截断，而**同文件** `:73` 的 `sendTerminalInput` 却截到 400 字符——同文件两套标准。AI 可以造一条前 200 字符人畜无害、末尾夹带 `rm -rf /data` 的超长命令，用户点 Continue 时并不知道自己批准了什么 |
+| 代码 diff | **J1+J2（`18d0383`，3 文件 +262/-24）**：`src/jumpserver/JumpServerClient.ts` **+127/-24** —— 新增导出纯函数 `resolveJumpServerUrl(baseUrl, pathOrUrl)`（解析 + 同源断言，跨源抛 `Refusing cross-origin JumpServer request to <origin> (expected <origin>)`）、`parseSetCookieHeader(header, requestUrl)`、`cookiesForUrl(cookies, url)` 与内部 `domainMatches`/`pathMatches`/`cookieAttribute`/`hasCookieFlag`，新增导出接口 `JumpServerCookie{name,value,domain,hostOnly,path,secure}`；jar 由 `Map<string,string>` 改为 `JumpServerCookie[]`（按 name+domain+path 原地替换以保持插入顺序，`cookieHeader()` 的输出顺序不变）；`request()` 改走 `resolveJumpServerUrl` 并用 `cookiesForUrl(jar, url)` 注入 Cookie；`captureCookies` 增加 `requestUrl` 参数；删除 `absoluteJumpServerUrl`（并入 `resolveJumpServerUrl`）；warmup 的 3 处调用点**不再手写 `Cookie: this.cookieHeader()`**，让 `request()` 成为读 jar 的唯一入口。`test/jumpserver/JumpServerClient.test.ts` **+111**（11 用例），新增 `test/jumpserver/testHttpServer.ts` **48 行**（`listenHttp`/`listenHttps`，记录每个请求的 method/url/body）。**J3（`f8056a5`，5 文件 +300/-4）**：新增 `src/jumpserver/restTransport.ts` **95 行**（`createJumpServerFetch({verifyTls})` → `node:https`/`node:http`，`rejectUnauthorized` 逐请求生效，永不跟随重定向，多条 `Set-Cookie` 逐条 `Headers.append`，204/205/304 走 null body，请求体只接受 string/Uint8Array 并自动补 `content-length`）；`JumpServerClient.ts` **+5/-4**（`fetchImpl ?? createJumpServerFetch({verifyTls: settings.verifyTls})`，`FetchLike` 类型移入新模块）；新增 `test-fixtures/selfSignedTls.ts` **54 行**（127.0.0.1 自签证书，有效期至 2126，SAN 含 `IP:127.0.0.1,DNS:localhost`）；新增 `test/jumpserver/restTransport.test.ts` **104 行**（6 用例）；`JumpServerClient.test.ts` **+46**（2 个端到端用例）。**J4（`4bcd701`，6 文件 +160/-42）**：`src/sftp/JumpServerSftpManager.ts` **+27/-14** —— `listDirectory`/`mkdir`/`rename`/`deleteEntry` 各补 `connectionKey?: string` 并透传给既有的 `requireConnection(connectionKey)`，`ensureRoot` 同步补该参数（否则显式指定 key 但该连接尚未 realpath 时会回落到活动连接），新增 `getConnectionAsset(connectionKey?)`；`src/agent/JumpServerAgentToolService.ts` **+56/-25** —— 依赖 `Pick` 增加 `getConnectionAsset`，新增模块级纯函数 `connectionKeyOf(input)` 与导出的 `formatAssetTarget(asset)`（`name (address)`，address 为空时只给 name，asset 缺失时给 `an unidentified JumpServer connection`），私有 `sftpTarget(input)`，5 处 SFTP 写确认文案全部改为 `... on <资产名> (<地址>)?`；`src/mcp/toolCatalog.ts` **+16/-9** —— `connectionKey`/`terminalId` 的 property description 与 `list_directory`/`create_directory`/`rename`/`delete` 四条 tool description 同步写明「按 connectionKey 选连接，省略则用活动连接」与「确认弹窗会报出目标资产与地址」；测试 `+103`。**J5（`7947a09`，4 文件 +172/-16）**：新增 `src/utils/commandPreview.ts` **41 行**（`COMMAND_PREVIEW_MAX_LINES=20` / `COMMAND_PREVIEW_MAX_CHARS=800` / `truncateCommandPreview` 从 `at-terminal-series` 逐字复制、`isObviouslyDestructive` 从该仓 `AgentToolService.ts:157-159` 移入、新增 `formatCommandConfirmMessage({action,target,command})`）；`JumpServerAgentToolService.ts` **+39/-16** —— 删除 `previewInput`，`runTerminalCommand`/`sendTerminalInput`/`mysqlSendInput`/`mysqlExecuteSql` 四处确认统一走新 formatter；测试 `+108`（8+2 用例）。**另有 `d22ea5c`（1 文件 +4/-1）** 修 hub H4 带来的既有 fixture 失效，见下方专段 |
+| 契约影响 | **否（不触及 Hub 契约）**。Bridge 线协议、registry 字段、Hub 暴露形状均零改动；`src/mcp/BridgeServer.ts`、`bridgeSchemas.ts`、`hubSync.ts` 的**生产代码**本轮一行未动。**但 J4 改变了 SFTP 工具的路由行为**：`connectionKey` 从「被接收后丢弃」变为「真正决定在哪台主机执行」。入参形状不变（`toolCatalog` 早已宣称接受它，`bridgeSchemas` 的 `.strict()` 早已放行它），变的是同一份入参产生的**副作用落点**。按 AGENTS.md §8.3「不要偷偷改工具语义而不改 description」，`toolCatalog.ts` 的 description 已在**同一个 commit** 内同步（4 条 tool description + 2 条 property description），未拆成后续提交 |
+| 文档 diff | 无 Hub 契约文档改动。插件仓内 `src/mcp/toolCatalog.ts` 的 tool description 已同步（见上一行），这是 AGENTS.md §8.3 与总纲第 2 节矩阵 J4 行点名要求的唯一文档载体 |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | **否**（本条只动 jumpserver 一个仓）。**但两点值得另两个插件知悉**：(1) `at-terminal-series` 的 `src/utils/commandPreview.ts` 现在在两个仓各有一份，抽 `@at-series/plugin-kit` 时应合并（属阶段 5）；(2) `at-grafana-series` 的 TOFU 证书信任实现是本仓 J3 加分项的参考对象，见下方「未做的加分项」 |
+| 核心不变量 | 已核对 **INV-1..INV-6 未被破坏**，逐条取证如下。**INV-1 / INV-2（IDE 只有一条 `AT Series`、不恢复 per-plugin MCP 入口）**：本轮四个 commit 的文件清单（`git show --stat` 逐一核对）不含 `src/mcp/McpConfigInstaller.ts`、`src/mcp/hubSync.ts`、`src/mcp/BridgeServer.ts`、`src/extension.ts` 中任何一个生产文件；未新增任何 MCP server 条目、未引入 `languageModelTools`、未新建备用入口。`rg 'languageModelTools\|mcpServers' src/` 在本轮改动的 5 个源文件中 **0 匹配**。**INV-3（Hub 内不写死插件工具清单）**：改动全在插件侧，Hub 一行未动；插件侧亦未按工具名分支，`toolCatalog.ts` 只改 description 字符串，15 个工具的 `name`/`risk`/`inputSchema` **逐字未变**（`toolCatalog.test.ts` 的 15 条 risk 断言 2/2 通过即为回归证据）。**INV-4 / INV-5（渐进暴露默认值与阈值、selection 不是 ACL）**：`rg 'AT_SERIES_TOOL_DISCOVERY' src/` **0 匹配**；本轮没有任何「未 select 就拒绝」的逻辑——J4 加的是**路由**参数而非授权判定，J5 加的是**展示**层截断与提示，两者都不改变哪些工具可被 `tools/call` 命中。特别说明：J4 让 `connectionKey` 真正生效**不是**引入 ACL，它决定的是「在哪台已连接的主机上执行」，而不是「这次调用是否被允许」；不指定时行为与既往一致（回落活动连接）。**INV-6（五个 Hub 元工具始终暴露、名称保留、`risk: read`、在 autoApprove 内）**：元工具是 Hub 内建、不经插件 registry，本轮零触碰；`AT_JUMPSERVER_TOOL_CATALOG` 仍为 15 条，未增删 |
+| 验证 | **四个缺陷全部严格 TDD，先红后绿，RED 失败原文见下方专段。** **① typecheck（沙箱外）：** `npm run typecheck` 退出码 **0、零诊断**。**② 全量测试（沙箱外，真实结果）：** `npm test` → `Test Files 37 passed (37)`、`Tests 261 passed (261)`，退出码 0。基线 225 + 本轮新增 36（J1/J2 11、J3 8、J4 7、J5 10）。**③ 沙箱内：** 4 失败，全部为 `EPERM: operation not permitted, mkdir '/var/folders/.../.cursor'`（`McpConfigInstaller.test.ts` 3 个 + `p0c.functional.e2e.test.ts` 1 个），与 P0-T3a / P0-T4b / P2-C 记录的同源沙箱限制，沙箱外全部消失。**④ 构建：** `node esbuild.config.mjs` 通过——这条专门为 J3 而跑，确认 `node:http`/`node:https` 在 esbuild `platform:'node'` 下按 external 处理，未被打进 bundle。**⑤ 类型纪律：** `rg -o '\bany\b' src/ \| wc -l` 仍为 **14**，且仍只分布在 `JumpServerClient.ts`(8) / `JumpServerSession.ts`(3) / `JumpServerSftpSession.ts`(3) 三个 JumpServer API 响应边界文件；`rg '@ts-ignore\|@ts-expect-error' src/` **0 匹配**。**⑥ 提交范围：** 5 个 commit 全部带 pathspec（`git add` 与 `git commit` 双侧），`git show --stat` 复核文件数分别为 3/5/6/4/1，无夹带；提交后 `package.json` / `package-lock.json` 仍为未暂存的 ` M`，按要求留在工作区 |
+| 提交 | at-jumpserver-series `18d0383`（J1+J2 同源断言与 cookie 作用域）、`f8056a5`（J3 REST TLS transport）、`4bcd701`（J4 connectionKey 透传 + 确认文案 + description 同步）、`7947a09`（J5 命令截断与危险识别）、`d22ea5c`（修 hub H4 带来的 fixture 失效），另本条台账 1 条。分支 `chore/at-series-optimization-phase0`，**未推送远程** |
+
+**RED 失败原文（这是四个修复各自有效的唯一证据）。**
+
+**J1 —— 攻击者 server 确实收到了明文密码，两次。** 复现方式按任务书建议：起两个本地 http server，「JumpServer」对 `/koko/connect/` 回 `302 Location: <攻击者 URL>/core/auth/login/`，「攻击者」回一份含 `csrfmiddlewaretoken` 的登录页。断言 `expect(attacker.requests).toEqual([])`，RED 输出：
+
+```
+AssertionError: expected [ { method: 'GET', …(2) }, …(3) ] to deeply equal []
++ [
++   { "body": "", "method": "GET",  "url": "/core/auth/login/?next=/koko/connect/" },
++   { "body": "csrfmiddlewaretoken=csrf-evil&username=alan&password=super-secret-bastion-password&auto_login=on",
++     "method": "POST", "url": "/core/auth/login/?next=/koko/connect/" },
++   { "body": "", "method": "GET",  "url": "/core/auth/login/?next=/koko/connect/" },
++   { "body": "csrfmiddlewaretoken=csrf-evil&username=alan&password=super-secret-bastion-password&auto_login=on",
++     "method": "POST", "url": "/core/auth/login/?next=/koko/connect/" }
++ ]
+```
+
+**四条而非两条**，因为 `warmupKokoConnectPage` 失败后会 `cookies.clear()` 再整轮重试一次——**密码被送出两遍**。配套的 `refuses a login redirect that leaves the JumpServer origin` 同时报 `expected [Function] to throw error matching /cross-origin/i but got 'KoKo web session is not authenticated.'`：旧代码不但没拦，连报错都指向了错误的原因（看起来像会话问题，实际是密码已经泄漏）。**J2** 的 5 条纯函数用例 RED 时全部为 `TypeError: (0 , parseSetCookieHeader) is not a function`。整组 RED 计数 `Tests 11 failed | 24 passed (35)`——24 条既有用例始终绿，证明用例组有鉴别力而非恒假。
+
+**J3 —— 「关掉 TLS 校验」在 REST 上完全无效。** 用自签证书起 HTTPS server，`verifyTls: false` 建客户端后调 `ensureAuthToken()`：
+
+```
+AssertionError: promise rejected "TypeError: fetch failed" instead of resolving
+Caused by: Error: self-signed certificate; if the root CA is installed locally, try running Node.js with --use-system-ca
+Serialized Error: { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }
+```
+
+`DEPTH_ZERO_SELF_SIGNED_CERT` 就是那个复选框本应消除的错误码。反向用例（`verifyTls: true` 应当拒绝）在 RED 时报 `expected [Function] to throw error matching /self.signed/i but got 'fetch failed'`——旧代码连**拒绝的理由**都被 fetch 吞成了泛化的 `fetch failed`，用户拿不到可诊断的信息。
+
+**J4 —— 四个操作全部落在了错误的连接上。** manager 层用例开两个连接（`terminal-1`/`terminal-2`，后者为活动），显式对 `terminal-1` 发 list/mkdir/rename/delete：
+
+```
+AssertionError: expected "spy" to be called with arguments: [ '/data' ]
+Number of calls: 0
+```
+
+`Number of calls: 0` 是关键——被点名的那个 session **一次都没被调用**，四个操作整体落在活动连接（另一台主机）上。service 层四条路由用例同时报 `expected "spy" to be called with arguments: [ '/data/new', 'terminal-prod' ]` 等；确认文案用例报 `expected 'Create JumpServer SFTP directory /dat…' to contain 'prod-db (10.0.0.9)'`——即弹窗里确实只有路径、没有资产名与地址，这正是「用户无法察觉目标错了」的直接证据。
+
+**J5 —— 弹窗把 1412 字符原样铺开，`rm -rf /data` 藏在末尾。** 构造 `'echo padding; '×100 + 'rm -rf /data'`，断言弹窗不含该片段：
+
+```
+AssertionError: expected 'Run JumpServer SSH command on prod-db…' not to contain 'rm -rf /data'
++ Run JumpServer SSH command on prod-db?
++
++ echo padding; echo padding; …（共 100 遍）… echo padding; rm -rf /data
+```
+
+Received 里可以直接读到：标题只有 `prod-db`（**无地址**），正文是完整的 1412 字符（**无截断、无长度标注**），危险片段就在最末尾（**无警告**）。这三样缺失合起来正是确认对话框欺骗。
+
+**J3 选了 `node:https` 而不是 `undici.Agent`，三条理由，逐条实测。** 任务书要求先确认 `undici` 能否直接 import——**能，但不该**。`npm ls undici` 的结果是 `at-jumpserver-terminal → @vscode/vsce@3.9.2 → cheerio@1.2.0 → undici@7.29.0`：它只是一个 **devDependency 的三级传递依赖**，`src/` 直接 import 就成了未声明的**运行时**依赖，一次 `npm ci --omit=dev` 或 vsce 的打包裁剪就会让构建失败；而本任务被明确要求不改 `package.json`，无法把它提升为显式依赖。第二，`esbuild.config.mjs` 是 `bundle: true` + `platform:'node'`，import undici 会把整个 undici 7 内联进 `dist/extension.js`，而 undici 的 HTTP 解析器是 **llhttp WebAssembly**，打包路径已知易碎。第三——也是收益最大的一条——`node:https` 顺带把 J1 的防线补严了：全局 fetch 下 REST 调用的 `redirect` 默认是 `'follow'`，undici 会**在 `request()` 的同源断言下面**自行跟随恶意 `Location`；新 transport 从不自动跟随，3xx 一律作为响应返回，于是「重定向链每一跳都校验」才是字面成立的。代价是自己实现了一层 ~95 行的 fetch 兼容层，已用 6 个用例覆盖方法/头/体透传、重定向不跟随、多条 `Set-Cookie` 保真、204 空体四类边界；风险面被 `fetchImpl` 这个既有构造参数天然隔离——**全部既有测试仍然注入自己的假 fetch，一个都没改**。gzip 是唯一需要点名的行为差异：Node 的 `http.request` 不自动发 `Accept-Encoding`，服务端因此不会压缩，无需解压路径。
+
+**加分项（自签 CA / 证书指纹 TOFU）未做，列为后续项。** 参考实现 `at-grafana-series/src/grafana/` 的 `GrafanaCertTrustStore.ts`(62 行) + `createInteractiveCertVerifier.ts`(83 行) + `ensureGrafanaTlsTrust.ts`(44 行) 合计约 190 行源码 + 190 行测试，且本仓的移植面**比 grafana 更大**：grafana 只有一条 HTTP 通道，本仓要同时覆盖 REST 与两条 `ws` 通道（`openKokoWebSocket` / `openKokoSftpWebSocket` 需要 `ca` 或 `checkServerIdentity`），还要设计 `verifyTls: boolean` 这个既有配置项的迁移语义并改 `JumpServerConfigPanel` 的表单。那是一个功能，不是一处修复，与本条「四个 P0 + 一个 P1」的边界不符，故按任务书授权只做 dispatcher 修复。**当前状态如实描述：`verifyTls` 现在是一个诚实的开关**——勾上则 REST 与 WS 都严格校验，勾掉则两者都不校验，不再存在「一半生效」的欺骗；但它仍然是全有全无，尚不能只信任某一张自签证书。
+
+**J2 的一处刻意偏离 RFC 6265（如实记录）。** `Set-Cookie` 未携带 `Path` 时，RFC 6265 §5.1.4 要求从请求路径推导 default-path（`/koko/connect/` → `/koko/connect`）。本实现一律回落 `/`。理由是：JumpServer 是 Django，`SESSION_COOKIE_PATH` 恒为 `/`，全部既有用例里的 `Set-Cookie` 也都显式带 `Path=/`；而一旦按 RFC 推导，某个由 `/koko/*` 下发且**恰好没带 Path** 的 cookie 会被静默排除在后续 `/api/v1/users/profile/` 请求之外，症状是「登录成功但会话时灵时不灵」，排查成本极高，收益却近乎为零——path 隔离防的是同源内的路径越界，不在本条的威胁模型里。**域隔离才是 J2 的实质**，已按 RFC 实现（host-only 精确匹配 / `Domain` 属性走后缀匹配），`Secure` 亦已实现（非 https 目标一律不发）。该取舍在 `parseSetCookieHeader` 里留了注释。
+
+**`cookieHeader()` 保持无参公开方法，是为了不误伤 KoKo 端点跨主机的场景。** 该方法被 `openKokoWebSocket` / `openKokoSftpWebSocket` 使用，而 WS 的目标主机来自 `getSmartEndpoint` 返回的 `endpoint.host`，**可能与 `baseUrl` 的主机不同**（KoKo 独立部署时就是如此）。若把它改成按 WS 目标 URL 过滤，这类部署会因域不匹配而丢掉 `sessionid`，终端与 SFTP 直接连不上。因此 `cookieHeader()` 的语义明确定为「JumpServer 基础源在 `/` 上的全部 cookie」，与改动前的输出逐字一致（`csrftoken=abc; sessionid=session-1`，既有两条 warmup 用例锁定了这个字符串）；按 URL 过滤的 `cookiesForUrl` 只用在 `request()` 内部。**这不构成 J2 的缺口**：`request()` 已被同源断言限制在基础源上，而 WS 侧本就在向本部署的组件发送本部署的会话 cookie。
+
+**J5 的 `isObviouslyDestructive` 扫描全文而不是扫描 preview（这一点决定了修复是否有意义）。** 截断之后，危险片段恰恰是**被切掉的那一段**；如果对 preview 做危险识别，攻击构造只需把 `rm -rf` 放在 801 字符之后就能同时躲过展示和检测，修复等于没做。实现里检测在截断**之前**对完整命令执行，并有专门用例 `flags a destructive tail buried past the preview limit` 与 `warns about a destructive tail the preview cannot show` 锁定（后者同时断言 preview 里**不含** `rm -rf /data`、消息**以**警告结尾——即「看不见但被告知」）。该正则从 `at-terminal-series/src/agent/AgentToolService.ts:157-159` 逐字复制，覆盖 `rm -r*`/`mkfs`/`shutdown`/`reboot`/`poweroff`/`dd if=`；**它是启发式而非安全边界**，绕过方式很多（`find -delete`、`> /dev/sda`、变量拼接），真正的防线仍是「每次都要用户确认」这条既有机制，本条只是让那次确认建立在没被欺骗的信息上。
+
+**顺带修了一处**由并行的 hub 改动引发、与本条四个缺陷无关**的既有测试失效（`d22ea5c`）。** `test/mcp/hubSync.test.ts` 的 `skips overwrite when active hub semver is newer` 在磁盘上写 `hub.js = 'active-newer'`，却在 `hub-version.json` 里记 `bundleSha256: 'abc'`。**P2-A（H4）** 让 `syncHubBundle` 在 no-op 之前校验**磁盘上**的真实哈希（`dist/publisher/HubBundleSync.js:42` 的 `(await onDiskSha256(targetHub)) === active.bundleSha256`），于是这份占位哈希被正确判定为「安装已被篡改」并触发重写，用例报 `expected { updated: true, activeVersion: '0.1.0' } to deeply equal { updated: false, activeVersion: '0.2.0' }`。**归属已取证而非推断**：该测试文件的 import 图为 `node:fs/promises` / `node:path` / `node:os` / `vitest` / `@at-series/mcp-hub` / `src/mcp/toolCatalog.ts` / `src/mcp/hubSync.ts`，**没有任何一条路径可达本轮改动的 5 个源文件**；且 `dist/publisher/HubBundleSync.js` 的 mtime（15:34）早于本轮第一次全量跑（15:39）。修法是把 fixture 的哈希从常量 `'abc'` 改为由内容现算（`createHash('sha256').update(activeContent)`），**恢复该用例本来想断言的东西**——一个完好的高版本 hub 不该被低版本候选覆盖；改之前它断言的其实是 hub 契约的反面。这不是放宽测试：篡改场景另有 hub 仓 P2-A 的 4 条用例守着。
+
+**并发协作说明：与 grafana / terminal 两个并行 agent 零文件重叠，未发生索引夹带。** 严格执行了 P2-C 台账 L484 那条教训——**`git add` 与 `git commit` 两侧都带 pathspec**，全程未用 `.` / `-A` / `-u`。5 个 commit 逐一 `git show --stat` 复核，文件数为 3 / 5 / 6 / 4 / 1，与预期完全一致，无他人在制品被卷入。`package.json` / `package-lock.json` 在整个过程中保持未暂存的 ` M` 状态（按要求留在工作区），提交后复查仍是 ` M`。本仓与另两仓不共享 `.git`，唯一的共享可变状态是本台账文件——追加前已按要求重新读取，本条紧接 P2-B2 之后追加，未覆盖任何既有条目。
