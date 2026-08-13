@@ -90,6 +90,12 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 - semver 相同且 hash 相同 → no-op
 - semver **更低** → 禁止覆盖
 
+上面四条比的是 `hub-version.json` 里的**自称**，还需要两条并发与完整性语义才成立（规范正文见 `docs/protocol/v1.md` §8.6）：
+
+- **no-op 前必须先哈希磁盘上的 `hub.js`**，与 `bundleSha256` 不符（或文件不存在）时一律当作「无 active」走写入路径，**即使记录的 semver 更高**。否则 `syncHubBundle` 会替被篡改的 bundle 挡住每一次修复。
+- **整段「读 meta → 校验磁盘 → 判定 → 写 hub.js → 写 meta」必须互斥**（`~/.at-series/mcp/.hub-sync.lock`，`O_EXCL` 创建，含 stale 夺取与释放保证）。三个插件在 IDE 启动时几乎同时激活，无锁时它们读到同一份选举前状态，最后写的赢——直接违反上面的「更低禁止覆盖」。
+- `hub-version.json` 损坏（非 JSON / 非对象 / `version` 非 semver / 缺 `bundleSha256`）时**当作没有 active 并自愈**，不得抛错——抛错会让全机所有插件的 hub 同步永久卡死。
+
 ---
 
 ## 4. 仓库布局
