@@ -49,10 +49,14 @@ describe('syncHubBundle', () => {
     await fs.rm(bundleDir, { recursive: true, force: true });
   });
 
-  async function candidate(content: string): Promise<string> {
-    const p = path.join(bundleDir, 'hub.js');
+  async function candidate(content: string, name = 'hub.js'): Promise<string> {
+    const p = path.join(bundleDir, name);
     await fs.writeFile(p, content, 'utf8');
     return p;
+  }
+
+  function lockPath(): string {
+    return path.join(path.dirname(hubJsPath(home)), '.hub-sync.lock');
   }
 
   it('writes hub.js and hub-version.json when no hub exists', async () => {
@@ -287,5 +291,198 @@ describe('syncHubBundle', () => {
       expect(meta.version).toBe('0.1.0');
       expect(meta.bundleSha256).toBe(sha256Hex(content));
     });
+  });
+
+  describe('concurrent election', () => {
+    it('never lets a lower version win a concurrent election', async () => {
+      const highContent = 'high-0.3.0';
+      const lowContent = 'low-0.2.0';
+      const highBundle = await candidate(highContent, 'high.js');
+      const lowBundle = await candidate(lowContent, 'low.js');
+
+      await Promise.all([
+        syncHubBundle({
+          version: '0.3.0',
+          bundlePath: highBundle,
+          pluginId: 'at.a',
+          pluginVersion: '1.0.0',
+          home
+        }),
+        syncHubBundle({
+          version: '0.2.0',
+          bundlePath: lowBundle,
+          pluginId: 'at.b',
+          pluginVersion: '1.0.0',
+          home
+        })
+      ]);
+
+      const meta = JSON.parse(
+        await fs.readFile(hubVersionPath(home), 'utf8')
+      ) as HubVersionRecord;
+      expect(meta.version).toBe('0.3.0');
+      // The metadata must describe the file that is actually on disk.
+      const onDisk = sha256Hex(await fs.readFile(hubJsPath(home)));
+      expect(meta.bundleSha256).toBe(onDisk);
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(highContent);
+    });
+
+    it('holds the same outcome when the low version is scheduled first', async () => {
+      const highContent = 'high-0.3.0';
+      const highBundle = await candidate(highContent, 'high.js');
+      const lowBundle = await candidate('low-0.2.0', 'low.js');
+
+      await Promise.all([
+        syncHubBundle({
+          version: '0.2.0',
+          bundlePath: lowBundle,
+          pluginId: 'at.b',
+          pluginVersion: '1.0.0',
+          home
+        }),
+        syncHubBundle({
+          version: '0.3.0',
+          bundlePath: highBundle,
+          pluginId: 'at.a',
+          pluginVersion: '1.0.0',
+          home
+        })
+      ]);
+
+      const meta = JSON.parse(
+        await fs.readFile(hubVersionPath(home), 'utf8')
+      ) as HubVersionRecord;
+      expect(meta.version).toBe('0.3.0');
+      expect(meta.bundleSha256).toBe(
+        sha256Hex(await fs.readFile(hubJsPath(home)))
+      );
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(highContent);
+    });
+
+    it('keeps metadata consistent when three plugins race', async () => {
+      const versions = ['0.1.0', '0.2.0', '0.3.0'];
+      const bundles = await Promise.all(
+        versions.map((v) => candidate(`bundle-${v}`, `${v}.js`))
+      );
+
+      await Promise.all(
+        versions.map((version, i) =>
+          syncHubBundle({
+            version,
+            bundlePath: bundles[i],
+            pluginId: `at.${i}`,
+            pluginVersion: '1.0.0',
+            home
+          })
+        )
+      );
+
+      const meta = JSON.parse(
+        await fs.readFile(hubVersionPath(home), 'utf8')
+      ) as HubVersionRecord;
+      expect(meta.version).toBe('0.3.0');
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe('bundle-0.3.0');
+      expect(meta.bundleSha256).toBe(
+        sha256Hex(await fs.readFile(hubJsPath(home)))
+      );
+    });
+
+    it('releases the lock after a successful sync', async () => {
+      const bundlePath = await candidate('released');
+
+      await syncHubBundle({
+        version: '0.1.0',
+        bundlePath,
+        pluginId: 'at.a',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      await expect(fs.access(lockPath())).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+    });
+
+    it('releases the lock when the write fails', async () => {
+      // hub.js is a directory, so the rename inside atomicWriteFile fails.
+      await fs.mkdir(hubJsPath(home), { recursive: true });
+      const bundlePath = await candidate('doomed');
+
+      await expect(
+        syncHubBundle({
+          version: '0.1.0',
+          bundlePath,
+          pluginId: 'at.a',
+          pluginVersion: '1.0.0',
+          home
+        })
+      ).rejects.toThrow();
+
+      await expect(fs.access(lockPath())).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+    });
+
+    it('steals a stale lock rather than wedging hub sync forever', async () => {
+      // A crashed plugin leaves its lock behind. Without stale handling every
+      // plugin on the machine would refuse to sync from then on.
+      await fs.mkdir(path.dirname(lockPath()), { recursive: true });
+      await fs.writeFile(
+        lockPath(),
+        JSON.stringify({ pid: 999_999, acquiredAt: Date.now() - 300_000 }),
+        'utf8'
+      );
+      const content = 'after-stale-lock';
+      const bundlePath = await candidate(content);
+
+      const result = await syncHubBundle({
+        version: '0.1.0',
+        bundlePath,
+        pluginId: 'at.a',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      expect(result).toEqual({ updated: true, activeVersion: '0.1.0' });
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
+    });
+
+    it('treats an unparseable lock file as stale', async () => {
+      await fs.mkdir(path.dirname(lockPath()), { recursive: true });
+      await fs.writeFile(lockPath(), 'not json at all', 'utf8');
+      const content = 'after-corrupt-lock';
+      const bundlePath = await candidate(content);
+
+      const result = await syncHubBundle({
+        version: '0.1.0',
+        bundlePath,
+        pluginId: 'at.a',
+        pluginVersion: '1.0.0',
+        home
+      });
+
+      expect(result).toEqual({ updated: true, activeVersion: '0.1.0' });
+      expect(await fs.readFile(hubJsPath(home), 'utf8')).toBe(content);
+    });
+
+    it('gives up instead of hanging when a live lock is never released', async () => {
+      await fs.mkdir(path.dirname(lockPath()), { recursive: true });
+      await fs.writeFile(
+        lockPath(),
+        JSON.stringify({ pid: process.pid, acquiredAt: Date.now() }),
+        'utf8'
+      );
+      const bundlePath = await candidate('blocked');
+
+      await expect(
+        syncHubBundle({
+          version: '0.1.0',
+          bundlePath,
+          pluginId: 'at.a',
+          pluginVersion: '1.0.0',
+          home
+        })
+      ).rejects.toThrow(/lock/i);
+    }, 15_000);
   });
 });
