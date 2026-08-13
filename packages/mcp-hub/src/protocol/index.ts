@@ -281,6 +281,14 @@ export function isBridgeEndpointPath(value: unknown): value is string {
   );
 }
 
+/**
+ * `hostApp` and `bridgeId` are the only caller-supplied segments of a registry
+ * path. Both must be expressible as a single path segment; the charset is what
+ * `slugifyHostAppId` already produces, widened only by `.` and `_` so that a
+ * lowercase UUID `bridgeId` fits.
+ */
+export const REGISTRY_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
 /** Registry `port`: an integer in the usable TCP range. */
 export function isBridgePort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
