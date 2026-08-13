@@ -1,12 +1,22 @@
 # Database Operations and Diagnosis
 
-Read this reference for database connection, availability, saturation, slow query, lock, replication, storage, backup, or migration symptoms. For query cancellation, failover, schema/data change, migration, restart, parameter change, or restore, also read [safe operations](safe-operations.md).
+Read this reference for database connection, availability, saturation, slow query, lock, replication, storage, backup, or migration symptoms. For query cancellation, failover, schema/data change, migration, restart, parameter change, or restore, also read [safe operations](safe-operations.md). For time-boxed QPS / traffic spikes, prefer [db-qps-spike.md](db-qps-spike.md).
 
 ## First-pass read-only checks
 
 Identify engine, version, topology, role, managed/self-hosted status, connection method, and authoritative monitoring before selecting commands. Never expose passwords, connection strings, query parameters containing secrets, or full production rows.
 
 Collect bounded evidence for availability, connection usage, active/long-running work, wait/lock state, replication health, storage headroom, error logs, and recent deployment/migration events. Prefer existing read-only monitoring views and approved credentials. Set statement/query timeouts for diagnostic queries where supported.
+
+## QPS / traffic spike path
+
+When Com_* / QPS / query rate spikes:
+
+1. **Grafana** — confirm narrow-window rate; extract Prom targets only (see [grafana.md](grafana.md)).
+2. **Com_* (or equivalent)** — decompose select/insert/update/delete; identify the driving type.
+3. **Upstream business logs** — HTTP/MQ/job logs for the same window (`batch` / `approve` / `job` / retries). Metrics co-rising with MQ/RPS is not root cause without an application trigger.
+
+Do not stop at “QPS correlates with traffic.”
 
 ## Decision path
 

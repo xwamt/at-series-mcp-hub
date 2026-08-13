@@ -22,16 +22,26 @@ Keep the IDE window with AT JumpServer Terminal open so its bridge stays healthy
 | Execute SQL | `jumpserver_mysql_execute_sql` | exec |
 | Interactive MySQL CLI input | `jumpserver_mysql_send_input` | exec |
 
+## Payload discipline
+
+- Command / SQL defaults: `maxOutputBytes` **64KB** (hard cap **256KB**). Prefer bounded `journalctl -n` / `tail` / greps.
+- SFTP read defaults: `maxBytes` **64KB** (hard cap **256KB**); reads are truncated, not whole-file buffered.
+- SFTP list: `maxEntries` default **500** (hard cap 5000) with `truncated`/`total` — narrow the path when truncated.
+- `jumpserver_list_assets`: use `search` / `limit` / `offset` (default limit 200); do not dump the full catalog into context.
+- On truncation, **narrow the query** (time, path, WHERE clause) — do not enlarge output limits to “get everything”.
+- **SQL must include `LIMIT`** (or equivalent row cap) on diagnostic selects. Prefer aggregates / top-N over full table scans.
+- **Forbidden by default:** `nginx -T`, unbounded directory walks, dumping entire log files, `SELECT *` without LIMIT on large tables.
+
 ## Workflow
 
 1. `jumpserver_get_terminal_context` before targeting an active SSH session.
-2. `jumpserver_list_assets` to discover asset IDs when the user has not named one.
+2. `jumpserver_list_assets` with `search`/`limit` when the user has not named an asset.
 3. Prefer `jumpserver_run_terminal_command` for bounded non-interactive work; use `jumpserver_send_terminal_input` only when interactivity is required.
-4. SFTP: list/stat/read before write/delete/rename.
-5. SQL: prefer `jumpserver_mysql_execute_sql`; use `jumpserver_mysql_send_input` only for interactive CLI cases.
+4. SFTP: list/stat/read before write/delete/rename; keep `maxEntries`/`maxBytes` bounded.
+5. SQL: prefer `jumpserver_mysql_execute_sql` with LIMIT; use `jumpserver_mysql_send_input` only for interactive CLI cases.
 6. Do not mix with AT Terminal short names (`list_ssh_servers`, `run_remote_command`, …) — different provider, different sessions.
 7. Expect IDE confirmation on write/exec tools; still ask the user before destructive or production-impacting changes.
 
 ## Ops references (mandatory when applicable)
 
-Before any write/exec or other remote state change, load [safe-operations.md](safe-operations.md). Host/runtime/incident playbooks are shared with Terminal — use the series skill ops router (linux, systemd, docker, incident-response, …).
+Before any write/exec or other remote state change, load [safe-operations.md](safe-operations.md). Host/runtime/incident playbooks are shared with Terminal — load **one** matching ops reference (cap: 1 provider + 1 ops per hypothesis). QPS spikes: [db-qps-spike.md](db-qps-spike.md).

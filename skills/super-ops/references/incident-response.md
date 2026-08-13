@@ -1,6 +1,6 @@
 # Incident Response
 
-Read this reference for outages, degradation, production errors, resource exhaustion, or other time-sensitive service incidents. Also load [safe operations](safe-operations.md) before any state change.
+Read this reference for outages, degradation, production errors, resource exhaustion, or other time-sensitive service incidents. Also load [safe operations](safe-operations.md) before any state change. Prefer the SuperOps **time-boxed incident fast path** in `SKILL.md` for QPS/latency/error spikes.
 
 ## Triage
 
@@ -10,7 +10,9 @@ Read this reference for outages, degradation, production errors, resource exhaus
 4. Establish a timeline from monitoring, logs, deployment events, configuration changes, and restarts.
 5. Distinguish symptom, trigger, contributing conditions, and root cause.
 
-Consider recent releases, expired certificates, disk or inode exhaustion, memory pressure, CPU saturation, permissions, network failures, dependency failures, queue growth, database health, and resource limits. Do not rely on application logs alone.
+Consider recent releases, expired certificates, disk or inode exhaustion, memory pressure, CPU saturation, permissions, network failures, dependency failures, queue growth, database health, and resource limits.
+
+**Logs are mandatory for root cause, not optional.** “Do not rely on application logs alone” means correlate logs **with** metrics/traces/deployments — it does **not** authorize skipping business logs. For DB or queue (MQ) spikes, you must have **application-side trigger evidence** (HTTP/job/batch/access events in the same window) before claiming root cause. Co-rising MQ/RPS/QPS alone is a propagation chain, not origin.
 
 ## Stabilization
 
@@ -30,4 +32,4 @@ Report:
 - Verification or rollback results.
 - Temporary mitigations, permanent follow-up work, and remaining risk.
 
-Never state that service is restored until health checks and critical behavior have been verified. A successful command exit code alone is insufficient.
+Never state that service is restored until health checks and critical behavior have been verified. A successful command exit code alone is insufficient. Do not open a Canvas until root cause is confirmed or the user asks for a report.
