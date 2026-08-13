@@ -297,29 +297,50 @@ export async function createHubRuntime(options: {
       home: options.home
     });
 
+    type ProbeResult =
+      | { kind: 'healthy'; entry: HealthyBridge }
+      | { kind: 'unhealthy'; entry: UnhealthyBridgeInput };
+
+    // Safe to Promise.all: each probe converts its own failure into
+    // `unhealthy`, so no element can reject.
+    const probes = await Promise.all(
+      records.map(async (record): Promise<ProbeResult> => {
+        try {
+          const health = await bridgeGetHealth(record);
+          let tools = record.tools;
+          try {
+            const toolsResponse = await bridgeGetTools(record);
+            tools = toolsResponse.tools;
+          } catch {
+            // Fall back to registry snapshot when live catalog fetch fails.
+          }
+          // Hub builtins are reserved: they never become Bridge routing winners.
+          tools = tools.filter(({ name }) => !META_TOOL_NAMES.has(name));
+
+          return {
+            kind: 'healthy',
+            entry: {
+              record,
+              tools,
+              connectedTargets: connectedTargetsForBridge(health, record)
+            }
+          };
+        } catch {
+          return { kind: 'unhealthy', entry: { record, status: 'unhealthy' } };
+        }
+      })
+    );
+
+    // Rebuild in registry order, not completion order: aggregateTools uses
+    // this ordering to break conflict ties, so a race here would make the
+    // exposed tool set flap between refreshes.
     const nextHealthy: HealthyBridge[] = [];
     const nextUnhealthy: UnhealthyBridgeInput[] = [];
-
-    for (const record of records) {
-      try {
-        const health = await bridgeGetHealth(record);
-        let tools = record.tools;
-        try {
-          const toolsResponse = await bridgeGetTools(record);
-          tools = toolsResponse.tools;
-        } catch {
-          // Fall back to registry snapshot when live catalog fetch fails.
-        }
-        // Hub builtins are reserved: they never become Bridge routing winners.
-        tools = tools.filter(({ name }) => !META_TOOL_NAMES.has(name));
-
-        nextHealthy.push({
-          record,
-          tools,
-          connectedTargets: connectedTargetsForBridge(health, record)
-        });
-      } catch {
-        nextUnhealthy.push({ record, status: 'unhealthy' });
+    for (const probe of probes) {
+      if (probe.kind === 'healthy') {
+        nextHealthy.push(probe.entry);
+      } else {
+        nextUnhealthy.push(probe.entry);
       }
     }
 
