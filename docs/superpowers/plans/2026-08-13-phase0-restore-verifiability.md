@@ -149,31 +149,72 @@ git diff --cached > /tmp/at-terminal-real-changes.diff
 
 对四个仓库分别执行，输出到 `/tmp/at-<name>-real-changes.diff`。
 
-- [ ] **Step 3：停下来，把四份 diff 交给用户裁决**
+- [ ] **Step 3：裁决结果（2026-08-13 已确认）**
 
-逐仓询问：这些未提交改动是要保留的在制品，还是应当丢弃的实验残留？特别注意这几处已知项：
-- 三个插件的 `package.json` 里 `@at-series/mcp-hub` 被从 `^0.2.1` 改回了 `file:../at-series-mcp-hub/packages/mcp-hub`（Task 3 会处理，此处先不动）
-- `at-jumpserver-series` 与 `at-grafana-series` 各有一个 `src/mcp/hostApp.ts` 被删除
-- `at-terminal-series` 的 `test/mcp/hostApp.test.ts` 被删除
+甄别结论：这 76 个文件**不是实验残留**，而是两条连贯的在制品。用户已裁决**两条都保留，并拆成独立提交**。
 
-**得到明确答复前不要执行 Step 4。**
+**在制品 A —— hostApp 探测上收到 hub 包**
 
-- [ ] **Step 4：按裁决结果提交**
+| 仓库 | 改动 |
+|---|---|
+| hub | `packages/mcp-hub/src/protocol/index.ts` 新导出 `detectHostApp` / `slugifyHostAppId` / `DetectHostAppInput`；版本 `0.2.1 → 0.2.2`；`docs/protocol/v1.md` +17；`test/protocol.exports.test.ts` +11 |
+| 三插件 | 删除 `src/mcp/hostApp.ts`（各 -44）与 `test/mcp/hostApp.test.ts`（各 -47）；`package.json` 改 `file:` 依赖 |
 
-保留的部分：
+这条已遵守 AGENTS.md §2.1（契约文档、类型、测试同批修改）。三插件改 `file:` 是因为 0.2.2 未发布——这正是当前构建失败的根因，由 Task 3 收尾。
+
+**在制品 B —— OPTIMIZE-P1：控制 Agent 工具返回值体积**
+
+| 仓库 | 改动 |
+|---|---|
+| terminal | `SftpAgentService.listDirectory` 加 `maxEntries`（默认 500 / 上限 5000）与 `truncated`/`total`；`toolCatalog` 描述写明默认值与上限并引导 agent 收窄 |
+| jumpserver | `jumpserver_list_assets` 加 `search` + `limit`/`offset`（默认 200 / 上限 500）；`JumpServerSftpSession` 相关 |
+| grafana | `grafana_get_dashboard` 加 `fields`（`full`/`summary`/`targets`）+ `panelIds` + `titleContains` 服务端投影 |
+| hub | `skills/super-ops/**` 文档同步 |
+
+**这条服务于 INV-4/INV-5 所保护的核心 B**：渐进发现解决「工具 schema 太多」，本条解决「工具返回值太大」。属于同方向的延续工作，不得丢弃。
+
+- [ ] **Step 4：按工作流拆分提交**
+
+`src/mcp/toolCatalog.ts` 与 `scripts/copy-hub.mjs` 同时被两条工作流触及，需要 `git add -p` 逐块挑选。
+
+每个仓库先提交 A，再提交 B。
+
+hub：
+
+```bash
+cd ~/项目/at/at-series-mcp-hub
+git add packages/mcp-hub/src/protocol/index.ts packages/mcp-hub/test/protocol.exports.test.ts packages/mcp-hub/package.json docs/protocol/v1.md docs/guides/plugin-integration.md docs/requirements.md README.md
+git commit -m "feat(protocol): export detectHostApp so plugins stop duplicating host detection"
+
+git add skills/ 
+git commit -m "docs(skills): document bounded tool output in the SuperOps references"
+```
+
+三个插件（以 terminal 为例，另两个同构）：
 
 ```bash
 cd ~/项目/at/at-terminal-series
-git commit -m "chore: normalize line endings to LF and land pending work"
+git rm src/mcp/hostApp.ts test/mcp/hostApp.test.ts
+git add src/extension.ts src/mcp/BridgeProtocol.ts src/mcp/McpConfigInstaller.ts
+git commit -m "refactor(mcp): consume detectHostApp from @at-series/mcp-hub"
+
+git add -p src/mcp/toolCatalog.ts    # 只挑 OPTIMIZE-P1 相关块
+git add src/agent/SftpAgentService.ts test/agent/SftpAgentService.test.ts test/mcp/toolCatalog.test.ts src/agent/AgentToolService.ts src/mcp/bridgeSchemas.ts skills/ docs/
+git commit -m "feat(agent): bound sftp_list_directory output with maxEntries and truncation"
 ```
 
-若用户选择丢弃某些改动，先 `git restore --staged --worktree <path>` 再提交。
+`package.json` 与 `package-lock.json` 的依赖改动**不在这两个提交里**——它们属于 Task 3。先用 `git restore --staged` 把它们留在工作区。
 
-若某仓库的真实改动为空（只有换行变化），提交信息用：
+若某仓库某条工作流无改动，跳过对应提交即可，不要造空提交。
+
+- [ ] **Step 4b：确认无遗漏**
 
 ```bash
-git commit -m "style: normalize line endings to LF"
+cd ~/项目/at/at-terminal-series
+git status --short
 ```
+
+预期：只剩 `package.json` 与 `package-lock.json` 未提交（留给 Task 3）。
 
 - [ ] **Step 5：验证噪声已消除**
 
@@ -192,24 +233,62 @@ git status --porcelain | wc -l
 
 ## Task 3：统一 `@at-series/mcp-hub` 依赖来源并恢复构建
 
-三个插件的 `node_modules/@at-series/` 当前是**空目录**，`tsc --noEmit` 各报 10–11 个 `TS2307`。HEAD 的 `package.json` 用的是 npm 上的 `^0.2.1`（已发布，是当前 latest），工作区却被改回了 `file:` 路径且没有安装。
+三个插件的 `node_modules/@at-series/` 当前是**空目录**，`tsc --noEmit` 各报 10–11 个 `TS2307`。
 
-**决策：统一使用 npm 版本。** 理由：`file:` 路径依赖让 CI 和干净检出无法工作，而阶段 1 会发布 0.3.0，插件届时只需升一次版本号。Hub 本地开发用 `npm pack` + 显式安装 tarball，不污染 `package.json`。
+> **原计划已被 Task 2 的甄别结果证伪，此处为修订版（2026-08-13）。**
+> 原方案是「统一改回 npm 的 `^0.2.1`」。这行不通：Task 2 的在制品 A 已经把三个插件的 `src/mcp/hostApp.ts` 删掉、改从 hub 导入 `detectHostApp`，而这个导出只存在于**未发布的 0.2.2**。回退到 0.2.1 会让三个插件 import 一个不存在的符号，编译照样失败。
+> `file:` 依赖不是失误，是这个增量在等发版。正确做法是把它做完。
+
+**决策：先发布 hub 0.2.2 修好构建，三插件依赖 `^0.2.2`。** 阶段 1 完成出站加固后再发 0.3.0。理由：`file:` 路径依赖让 CI 和干净检出无法工作，必须先有一个可从 npm 解析的版本；而 0.2.2 的内容（`detectHostApp` 导出）已经完成且文档同步到位，具备发版条件。
 
 **Files:**
 - Modify: `at-terminal-series/package.json:314`
 - Modify: `at-jumpserver-series/package.json:253`
 - Modify: `at-grafana-series/package.json`（`dependencies` 段）
 
-- [ ] **Step 1：确认 npm 上的可用版本**
+- [ ] **Step 1：确认 hub 0.2.2 的内容完整且可发布**
 
 ```bash
-npm view @at-series/mcp-hub versions --json
+cd ~/项目/at/at-series-mcp-hub
+git log --oneline -3
+node -e "console.log(require('./packages/mcp-hub/package.json').version)"
+rg -n 'detectHostApp|slugifyHostAppId' packages/mcp-hub/src/index.ts packages/mcp-hub/src/protocol/index.ts
 ```
 
-预期输出包含 `"0.2.1"` 且它是最后一项。若 latest 已变，用实际的 latest 替换下文的 `^0.2.1`。
+预期：版本输出 `0.2.2`；`detectHostApp` 与 `slugifyHostAppId` 确实从 `protocol/index.ts` 导出，且能经 `src/index.ts` 到达包的公共 API。若 `src/index.ts` 没有再导出，补上——否则插件 `import { detectHostApp } from '@at-series/mcp-hub'` 会失败。
 
-- [ ] **Step 2：把三个插件的依赖改回 npm 版本**
+- [ ] **Step 2：构建、测试、发布 hub 0.2.2**
+
+```bash
+cd ~/项目/at/at-series-mcp-hub
+rm -rf node_modules package-lock.json
+npm install
+npm run typecheck && npm run build && npm run build:hub && npm test
+```
+
+预期：全部通过。然后：
+
+```bash
+cd packages/mcp-hub
+npm pack --dry-run
+```
+
+确认产物含 `dist/index.d.ts` 且其中有 `detectHostApp` 的类型声明：
+
+```bash
+rg -n 'detectHostApp' dist/index.d.ts
+```
+
+预期：有输出。确认无误后发布：
+
+```bash
+npm publish
+npm view @at-series/mcp-hub version
+```
+
+预期：输出 `0.2.2`。
+
+- [ ] **Step 3：把三个插件的依赖指向已发布的 0.2.2**
 
 在每个 `package.json` 的 `dependencies` 中，将
 
@@ -220,12 +299,12 @@ npm view @at-series/mcp-hub versions --json
 改为
 
 ```json
-"@at-series/mcp-hub": "^0.2.1",
+"@at-series/mcp-hub": "^0.2.2",
 ```
 
-- [ ] **Step 3：重装依赖（必须在本机重新解析原生包）**
+- [ ] **Step 4：重装三个插件的依赖（必须在本机重新解析原生包）**
 
-当前 `node_modules` 是在其他平台安装后拷贝过来的：缺 `@rollup/rollup-darwin-arm64`，且 `node_modules/.bin/tsc` 没有执行权限。必须整棵删除重装。
+当前 `node_modules` 是在其他平台安装后拷贝过来的：缺 `@rollup/rollup-darwin-arm64`，且 `node_modules/.bin/tsc` 没有执行权限。必须整棵删除重装。hub 已在 Step 2 重装过，此处只处理三个插件。
 
 ```bash
 cd ~/项目/at/at-terminal-series
@@ -233,23 +312,15 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
-对 `at-jumpserver-series`、`at-grafana-series` 重复。`at-series-mcp-hub` 也要重装：
+对 `at-jumpserver-series`、`at-grafana-series` 重复。
+
+装完后确认拿到的确实是刚发布的版本：
 
 ```bash
-cd ~/项目/at/at-series-mcp-hub
-rm -rf node_modules package-lock.json
-npm install
+node -e "console.log(require('./node_modules/@at-series/mcp-hub/package.json').version)"
 ```
 
-- [ ] **Step 4：验证 hub 自身可构建可测**
-
-```bash
-cd ~/项目/at/at-series-mcp-hub
-npm run build && npm run build:hub && npm test
-```
-
-预期：`dist/hub.js` 生成；测试全部通过。
-注意 `packages/mcp-hub/test/p0a.e2e.functional.test.ts` 依赖 `dist/hub.js` 存在，所以 `build:hub` 必须先于 `npm test`。
+预期输出 `0.2.2`。若仍是 `0.2.1`，说明 npm registry 缓存未刷新，等一会儿或 `npm install @at-series/mcp-hub@0.2.2` 显式指定。
 
 - [ ] **Step 5：验证三个插件的 typecheck**
 
@@ -278,20 +349,22 @@ test/mcp/p0c.functional.e2e.test.ts(101,23): error TS2339: Property 'tools' does
 ```bash
 cd ~/项目/at/at-terminal-series
 git add package.json package-lock.json
-git commit -m "build: consume @at-series/mcp-hub from npm instead of a local file: path"
+git commit -m "build: depend on the published @at-series/mcp-hub 0.2.2"
 ```
 
-三个插件仓各提交一次；hub 仓若 `package-lock.json` 有变化也提交。
+三个插件仓各提交一次。hub 仓若 `package-lock.json` 有变化也提交，提交信息用 `build: refresh lockfile after 0.2.2 install`。
 
 - [ ] **Step 7：写台账**
 
-`动机` 填 `X2`。`验证` 字段记录三仓 typecheck 的实际输出。
+`动机` 填 `X2`，并写明「原计划的回退方案被 Task 2 的甄别结果证伪，改为发布 0.2.2 完成在制品 A」。`验证` 字段记录 `npm view` 的版本输出与三仓 typecheck 的实际输出。
 
 ---
 
 ## Task 4：修复 jumpserver 的三个真实类型错误
 
 这三个错误与模块解析无关，是 `p0c` 端到端测试里的真实类型问题，Task 3 之后会独立暴露出来。
+
+> **执行前先复核（2026-08-13 补充）：** Task 2 的甄别发现 `test/mcp/p0c.functional.e2e.test.ts` 本身带有 2 行未提交改动，属于在制品 B。这三个类型错误有可能是那条工作流没写完的部分，也可能是更早的遗留。Step 1 跑完 typecheck 后，先与 `git log -1 --stat -- test/mcp/p0c.functional.e2e.test.ts` 对照判断归属，再决定是按下文修，还是回到在制品 B 的语境里补完。**归属判断结果要写进台账。**
 
 **Files:**
 - Modify: `at-jumpserver-series/test/mcp/p0c.functional.e2e.test.ts:38,83,101-120`
