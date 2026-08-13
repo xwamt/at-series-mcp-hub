@@ -15,7 +15,15 @@ await esbuild.build({
   platform: 'node',
   target: 'node18',
   format: 'cjs',
-  sourcemap: true,
+  // This bundle is copied verbatim into every AT Series VSIX, so its size is
+  // paid three times over. `keepNames` costs a little of that back but keeps
+  // stderr stack traces readable, which is the only diagnostic channel the
+  // hub has once it is running under an IDE.
+  minify: true,
+  keepNames: true,
+  // No sourcemap: nothing consumes it. `copy-hub.mjs` ships only hub.js, so a
+  // map would bloat the npm tarball by ~1.4 MB and reach no debugger.
+  sourcemap: false,
   define: {
     __HUB_VERSION__: JSON.stringify(pkg.version)
   },
