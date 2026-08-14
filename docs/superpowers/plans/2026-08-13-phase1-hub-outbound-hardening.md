@@ -704,7 +704,7 @@ import { describeError, hubLog } from './logger';
   }
 ```
 
-这里依赖 `catalog` 与 `providersResult` 在 `createHubRuntime` 初始化时已有初值。确认它们在 :195-222 的状态声明处被初始化为空目录而非 `undefined`；若为 `undefined`，先给出空初值再实现本步。
+**已核实（2026-08-13）：** `catalog` 在 `server.ts:198-202` 初始化为 `{ tools: [], winners: new Map(), conflicts: [] }`，`providersResult` 在 `:203-209` 初始化为一个空的 `buildListProvidersResult(...)`，两者都不是 `undefined`。因此上面的降级分支从第一次刷新起就安全，无需额外的初值处理。
 
 - [ ] **Step 5：给两个 `void refreshCatalog()` 加显式 catch**
 

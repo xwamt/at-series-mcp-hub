@@ -317,6 +317,133 @@ describe('IDE MCP config write safety', () => {
     });
   });
 
+  describe('unparseable configs', () => {
+    const withComments = [
+      '{',
+      '  // the fetch server, added by hand',
+      '  "mcpServers": {',
+      '    "other-server": { "command": "uvx" }',
+      '  }',
+      '}',
+      ''
+    ].join('\n');
+
+    it('names the offending file', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+
+      await expect(ensure()).rejects.toThrow(mcpPath);
+    });
+
+    it('says the config could not be parsed rather than leaking a bare SyntaxError', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+
+      await expect(ensure()).rejects.toThrow(/not valid JSON/i);
+    });
+
+    it('points at comments and trailing commas, the usual cause', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+
+      await expect(ensure()).rejects.toThrow(/comment/i);
+    });
+
+    it('keeps the parser complaint for diagnosis', async () => {
+      const trailingComma = '{ "mcpServers": { "a": {}, } }';
+      let parserSaid = '';
+      try {
+        JSON.parse(trailingComma);
+      } catch (error) {
+        parserSaid = (error as Error).message;
+      }
+      expect(parserSaid).not.toBe('');
+      await fs.writeFile(mcpPath, trailingComma, 'utf8');
+
+      await expect(ensure()).rejects.toThrow(parserSaid);
+    });
+
+    it('leaves the file exactly as it was', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+
+      await expect(ensure()).rejects.toThrow();
+
+      expect(await fs.readFile(mcpPath, 'utf8')).toBe(withComments);
+    });
+
+    it('writes no backup for a config it never rewrote', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+
+      await expect(ensure()).rejects.toThrow();
+
+      await expect(
+        fs.access(mcpConfigBackupPath(mcpPath))
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('releases the lock so a repaired config can be retried', async () => {
+      await fs.writeFile(mcpPath, withComments, 'utf8');
+      await expect(ensure()).rejects.toThrow();
+
+      await fs.writeFile(
+        mcpPath,
+        '{"mcpServers":{"other-server":{"command":"uvx"}}}',
+        'utf8'
+      );
+
+      await expect(ensure()).resolves.toEqual({ updated: true });
+    });
+  });
+
+  describe('formatting', () => {
+    it('keeps four-space indentation', async () => {
+      await fs.writeFile(
+        mcpPath,
+        `${JSON.stringify({ mcpServers: { 'other-server': otherServer } }, null, 4)}\n`,
+        'utf8'
+      );
+
+      await ensure();
+
+      const text = await fs.readFile(mcpPath, 'utf8');
+      expect(text).toContain('\n    "mcpServers"');
+    });
+
+    it('keeps tab indentation', async () => {
+      await fs.writeFile(
+        mcpPath,
+        `${JSON.stringify({ mcpServers: { 'other-server': otherServer } }, null, '\t')}\n`,
+        'utf8'
+      );
+
+      await ensure();
+
+      const text = await fs.readFile(mcpPath, 'utf8');
+      expect(text).toContain('\n\t"mcpServers"');
+    });
+
+    it('defaults to two spaces for a config with no indentation to copy', async () => {
+      await fs.writeFile(mcpPath, '{"mcpServers":{}}', 'utf8');
+
+      await ensure();
+
+      const text = await fs.readFile(mcpPath, 'utf8');
+      expect(text).toContain('\n  "mcpServers"');
+    });
+
+    it('keeps the order of the servers already there', async () => {
+      await seed({
+        mcpServers: { zeta: otherServer, alpha: otherServer, mid: otherServer }
+      });
+
+      await ensure();
+
+      expect(Object.keys((await readDoc()).mcpServers)).toEqual([
+        'zeta',
+        'alpha',
+        'mid',
+        MCP_SERVER_DISPLAY_NAME
+      ]);
+    });
+  });
+
   describe('file ownership', () => {
     it.skipIf(process.platform === 'win32')(
       'does not re-permission the user config',

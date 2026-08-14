@@ -84,6 +84,7 @@ export async function ensureJsonIdeMcpConfig(input: {
     await writeJsonConfigDocument({
       configPath: input.configPath,
       config: nextConfig,
+      format: document.format,
       existed: document.raw !== undefined
     });
     return { updated: true };
@@ -110,6 +111,7 @@ export async function uninstallJsonIdeMcpConfig(input: {
     await writeJsonConfigDocument({
       configPath: input.configPath,
       config: nextConfig,
+      format: document.format,
       existed: document.raw !== undefined
     });
     return { removed: true };
