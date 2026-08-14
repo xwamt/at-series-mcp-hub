@@ -1,7 +1,7 @@
 # Changelog
 
 All notable changes to `@at-series/mcp-hub`.
-This package is consumed by AT Terminal, AT JumpServer, and AT Grafana —
+This package is consumed by AT Terminal, AT JumpServer, AT Grafana, and AT Nacos —
 every entry below is written for those plugin authors.
 
 ## 0.3.0
@@ -15,6 +15,10 @@ every entry below is written for those plugin authors.
 - **Bridge responses are capped at 2 MiB**, matching the request-side limit
   v1 already specified. Oversized responses are aborted mid-stream instead of
   being buffered into the Hub process.
+- **Timing-safe token helpers.** `timingSafeEqualToken` and `createBridgeToken`
+  are now exported from `@at-series/mcp-hub` to prevent timing side-channel attacks.
+- **Atomic permission-preserving writes.** `atomicWriteFile` and `withFileLock`
+  prevent race conditions and ensure files/directories adhere to `0600`/`0700` modes.
 
 ### Fixed
 
@@ -22,6 +26,11 @@ every entry below is written for those plugin authors.
   wedged Bridge used to hang every `tools/list` and `tools/call` indefinitely.
 - A non-`ENOENT` registry read failure no longer terminates the Hub. The
   previous catalog is retained and the cause is logged to stderr.
+- `syncHubBundle` now validates the real on-disk SHA-256 hash of `hub.js` before
+  skipping bundle synchronization.
+- Configuration installer handles syntax errors (comments, trailing commas) gracefully
+  without overwriting user config files, preserves indentation (2/4 spaces, tabs),
+  and writes `.bak` backups.
 
 ### Added
 
@@ -29,6 +38,9 @@ every entry below is written for those plugin authors.
   `bridgeGetHealth`, `bridgeGetTools`, and `bridgeInvoke`.
 - `AT_SERIES_LOG_LEVEL` (`silent` | `error` | `warn` | `info`, default `warn`)
   controls stderr diagnostics. Tokens are redacted from log lines.
+- `detectHostApp` / `slugifyHostAppId` / `DetectHostAppInput` are now exported,
+  unifying IDE environment detection across all plugins.
+- MCP Tool Annotations mapping for `risk` attributes (`read` / `write` / `exec`).
 
 ### Changed
 
@@ -45,5 +57,4 @@ within the §7.8 ceilings rather than doing product I/O on those paths.
 
 ### Added
 
-- `detectHostApp` / `slugifyHostAppId` / `DetectHostAppInput` are now exported,
-  so plugins no longer need their own copy of host detection.
+- `detectHostApp` / `slugifyHostAppId` / `DetectHostAppInput` initial export.
