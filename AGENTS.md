@@ -45,17 +45,26 @@
 
 1. 适用的 `docs/protocol/v1.md` 和/或 `docs/protocol/v2.md`（规范正文；破坏性变更还须升高相应 `protocolVersion` 并写清迁移）
 2. 包内协议类型（`packages/mcp-hub/src/protocol`，由 `@at-series/mcp-hub` 导出）
-3. 若影响接入步骤：`docs/guides/plugin-integration.md`
-4. 若影响产品范围/验收：`docs/requirements.md`
+3. 若影响接入步骤：**必须**更新 `docs/guides/plugin-integration.md` 里的 import 与调用示例，使其对当前导出 **TypeScript 可编译**（禁止无参 `detectHostApp()` 这类与类型不符的伪代码）
+4. 若影响产品范围/验收：`docs/requirements.md`（改产品意图必须 **先** 改 requirements，再改 protocol / 实现）
+5. 若影响本文件中的模块职责、测试最少集、或插件迁移清单：同步 **本文件 `AGENTS.md`**
+
+额外（插件仓已形成的标准惯例，第三方按本仓指南对接时必须看得到）：
+
+- VSIX 打包 `hub.js`（`copy-hub.mjs` 范式；运行时 `bundlePath` 指向扩展 `dist/`，不是 `require.resolve`）
+- `hostApp` → installer `target` 映射（`cursor` / `kiro` / `continue`；其余跳过）——这是插件侧推荐写法，**不是** Hub 导出 API，但必须写进指南并标明边界
+
+完成判据不只是「有 protocol diff」。第三方按指南复制示例必须能编过、能在生产 VSIX 里激活。
 
 **禁止：**
 
 - 先改 Hub/helper 实现、后补文档（或根本不补）
 - 只改类型/代码注释、不改适用的 protocol 文档
+- 只改指南注释、不改 `requirements.md` / protocol（installer 策略这类产品决策尤其禁止）
 - 让插件继续按旧文档对接已变更的服务接口
 
 失败模式（必须避免）：服务接口已变，插件仍按旧 protocol 文档对接 → 联调失败或静默错误。
-PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol 文档 diff；无文档 diff 即不合格。
+PR / 实现声称「接口变更完成」前，Agent 须同时指出：(1) 适用 protocol 文档 diff；(2) 若触及接入步骤，则 `plugin-integration.md` 示例已按新签名更新。无 protocol diff 即不合格；有 protocol diff 但指南示例编不过同样不合格。
 
 ---
 
@@ -69,7 +78,7 @@ PR / 实现声称「接口变更完成」前，Agent 须能指出对应 protocol
 | registry / publisher | 读写 `~/.at-series/bridges/<hostApp>/<bridgeId>.json`；heartbeat；unpublish |
 | hub runtime | stdio MCP；聚合/渐进暴露 `tools/list`；路由 `tools/call`；发现/选择元工具；watch + `list_changed` |
 | hub bundle sync | 选举写入 `~/.at-series/mcp/hub.js` + `hub-version.json` |
-| config installer helper | 写/修/卸 **`AT Series`**；迁移旧条目；按 `risk=read` 算 autoApprove |
+| config installer helper | 写/修/卸 **`AT Series`**；迁移旧条目；autoApprove **仅五个 Hub 元工具**（不按业务 `risk=read` 写入） |
 
 **分发：** npm 发版 → 插件 `dependencies` → 构建把 hub bundle 打进 VSIX → activate 时 sync 到 `~/.at-series`。
 
@@ -164,7 +173,7 @@ at-series-mcp-hub/
    - registry 删除 → 工具消失（+ list_changed）  
    - hub 低版本不能覆盖  
    - 同版本不同 hash 可覆盖  
-   - installer autoApprove 仅 read + `at_list_providers`  
+   - installer autoApprove 仅五个 Hub 元工具（忽略 `registryTools`）  
    - 旧 server 名迁移且不删第三方 MCP  
 6. **不要**为「方便」在 Hub 内特殊对待 `at.terminal` / `at.jumpserver` 业务字段。
 
@@ -210,8 +219,10 @@ Hub v1 **不读**旧 `~/.at-terminal` / `~/.at-jumpserver-terminal` 路径。
 - [ ] 主鉴权头 `x-at-series-token`；错误体结构化；建议 2MiB body 上限
 - [ ] Registry：`~/.at-series/bridges/<hostApp>/<bridgeId>.json`，含 `protocolVersion: 1`、`tools[].risk`、心跳 ≤30s
 - [ ] 删除产品入口：`dist/mcp-server.js` 不再写入 IDE MCP；移除 `languageModelTools`
-- [ ] Installer：只写 **`AT Series`** + `AT_SERIES_HOST_APP`；调用本仓 helper；迁移旧条目；不删第三方
-- [ ] autoApprove：仅 `risk=read` + `at_list_providers`（纠正 AT Terminal「全量 autoApprove」）
+- [ ] Installer：只写 **`AT Series`** + §9.1 全套 env；调用本仓 helper；迁移旧条目；不删第三方
+- [ ] autoApprove：仅五个 Hub 元工具（纠正「按业务 `risk=read` 写入」或 AT Terminal「全量 autoApprove」）
+- [ ] MCP 构建：把 `hub.js` + `hub-version.json` 打进 VSIX `dist/`；activate 时 `bundlePath` 指向该副本，且 **先** `await syncHubBundle` **再** `ensureAtSeriesMcpConfig`
+- [ ] 非 Cursor/Kiro/Continue（及 Continue 无 `workspaceFolder`）跳过 MCP 配置写入；提供 Repair / Uninstall 命令，deactivate 只 unpublish
 - [ ] 每个 `risk=write|exec` 有插件内确认或等价授权
 - [ ] 文档/skill 指向本仓系列 skill；旧 per-plugin MCP skill 删除或改指向
 
@@ -258,7 +269,7 @@ Hub v1 **不读**旧 `~/.at-terminal` / `~/.at-jumpserver-terminal` 路径。
 5. 不同 IDE 不串台（`hostApp`）  
 6. 扩展升级后仍指向 `~/.at-series/mcp/hub.js`  
 7. 低版本不能降级 Hub；同版本不同 hash 可更新  
-8. write/exec 不在默认 autoApprove，且插件内确认仍在  
+8. 业务工具（含 `risk=read`）不在默认 autoApprove；write/exec 插件内确认仍在  
 9. 仓库不再推荐 LM tools / per-plugin mcp-server  
 
 ---
@@ -275,6 +286,8 @@ Hub v1 **不读**旧 `~/.at-terminal` / `~/.at-jumpserver-terminal` 路径。
 | 同 semver 总是覆盖或永不覆盖 | 按 hash 规则 |
 | 静默改 requirements/protocol 决策 | 先改文档再改代码 |
 | 接口实现已变、适用 protocol 文档未同变更集更新 | **硬停**；补齐 §2.1 要求的文档/类型后再继续 |
+| 指南示例与当前导出签名不一致（编不过 / VSIX 激活路径错误） | **硬停**；先改 `plugin-integration.md` 示例 |
+| 只改指南或代码注释、requirements/protocol 仍是旧产品决策 | **硬停**；先改 requirements 再改 protocol |
 | 插件按旧文档对接新接口 | 以最新适用 protocol 为准重对接；修文档滞后而非让插件猜实现 |
 | 未 grill/未改文档就扩大包边界 | 先更新 requirements D26+ |
 

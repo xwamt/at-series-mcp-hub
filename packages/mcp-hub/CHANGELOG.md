@@ -4,6 +4,31 @@ All notable changes to `@at-series/mcp-hub`.
 This package is consumed by AT Terminal, AT JumpServer, AT Grafana, and AT Nacos —
 every entry below is written for those plugin authors.
 
+## 0.3.2
+
+### Added
+
+- **Hub-local agent ops audit log.** Business `tools/call` is recorded as JSONL
+  under `~/.at-series/logs/<hostApp>/agent-ops-YYYY-MM-DD-<pid>.jsonl`. Disable
+  with `AT_SERIES_AUDIT_LOG=false`. Meta-tools are not recorded. Writes are
+  async (queue cap 100) and must not change the MCP result. See
+  [protocol/v1.md §3.4](../../docs/protocol/v1.md).
+
+### Changed
+
+- Installer `autoApprove` is documented as **Hub meta-tools only** (no business
+  `risk=read` tools). Protocol §9, requirements D20/C6, and `AGENTS.md` now
+  match the implementation.
+- Plugin integration guide now covers `detectHostApp({ ... })`, VSIX
+  `copy-hub.mjs` packaging, `await syncHubBundle` before
+  `ensureAtSeriesMcpConfig`, `uninstallAtSeriesMcpConfig`, Continue
+  `workspaceFolder`, and heartbeat `capabilities` patches.
+
+### Migration
+
+Bump the plugin dependency so `syncHubBundle` elects this semver over `0.3.0`.
+Bridge wire stays `1`; Hub surface stays `2`.
+
 ## 0.3.0
 
 ### Security

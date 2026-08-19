@@ -21,6 +21,7 @@ export const AT_SERIES_PROTOCOL_VERSION = AT_SERIES_BRIDGE_PROTOCOL_VERSION;
 export const AT_SERIES_ROOT_DIRNAME = '.at-series';
 export const AT_SERIES_MCP_DIRNAME = 'mcp';
 export const AT_SERIES_BRIDGES_DIRNAME = 'bridges';
+export const AT_SERIES_LOGS_DIRNAME = 'logs';
 export const AT_SERIES_HUB_FILENAME = 'hub.js';
 export const AT_SERIES_HUB_VERSION_FILENAME = 'hub-version.json';
 
@@ -63,6 +64,16 @@ export const AT_SERIES_TOOL_SELECTION_IDLE_MS_ENV =
  */
 export const AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV =
   'AT_SERIES_TOOL_SELECTION_MAX_CALLS';
+
+/** Hub local JSONL audit of business tools/call. Unset = enabled. */
+export const AT_SERIES_AUDIT_LOG_ENV = 'AT_SERIES_AUDIT_LOG';
+export const AT_SERIES_AUDIT_RETENTION_DAYS_ENV =
+  'AT_SERIES_AUDIT_RETENTION_DAYS';
+export const AT_SERIES_AUDIT_MAX_FIELD_BYTES_ENV =
+  'AT_SERIES_AUDIT_MAX_FIELD_BYTES';
+
+export const DEFAULT_AUDIT_RETENTION_DAYS = 30;
+export const DEFAULT_AUDIT_MAX_FIELD_BYTES = 4096;
 
 export const DEFAULT_TOOL_DISCOVERY_THRESHOLD = 20;
 

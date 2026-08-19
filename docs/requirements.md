@@ -90,8 +90,8 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | D17 | Bridge API | 统一 **`GET /health`、`GET /tools`、`POST /invoke`** |
 | D18 | 旧 per-plugin MCP | **删除产品入口**，只留 AT Series Hub；配置一并迁移 |
 | D19 | 风险模型 | 三级 **`read` / `write` / `exec`**，由**插件注册时声明** |
-| D20 | autoApprove | 默认 **仅 `read`**（含 `at_list_providers`） |
-| D21 | 目录 | 统一 `~/.at-series/`（mcp + bridges） |
+| D20 | autoApprove | 默认 **仅 Hub 五个元工具**（`at_list_providers` / `at_search_tools` / `at_get_tool` / `at_select_tools` / `at_clear_tool_selection`）。**不**把 Bridge 业务工具（含 `risk=read`）写入 autoApprove |
+| D21 | 目录 | 统一 `~/.at-series/`（mcp + bridges + logs） |
 | D22 | 卸载默认行为 | deactivate **只删自己的 bridge**；不删 hub.js / 不删 MCP 配置 |
 | D23 | 显式清理 | 提供 Repair / Uninstall MCP Config 命令 |
 | D24 | IDE 隔离 | 按 **`hostApp`** 隔离；MCP env：`AT_SERIES_HOST_APP`；探测用 `detectHostApp`（路径派生，禁止未识别 IDE 共用 `unknown`） |
@@ -124,7 +124,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | H10 | `tools/call` 路由到对应插件 Bridge 的 `/invoke` | P0 |
 | H11 | 同 `pluginId` 多 Bridge 折叠工具并智能选路 | P0 |
 | H12 | 跨 `pluginId` 工具名冲突可诊断，list 中只保留胜者 | P0 |
-| H13 | 内置 `at_list_providers`（只读、可 autoApprove） | P0 |
+| H13 | 内置五个元工具（只读；installer autoApprove 仅这五个） | P0 |
 | H14 | 不持有业务凭据，不实现 SSH/JumpServer 业务 | P0 |
 | H15 | 支持 registry 目录 watch；无原生 watch 时轮询兜底 | P1 |
 | H16 | Hub v2 在大目录下支持 discover → select → first-class 工具暴露；可通过 `AT_SERIES_TOOL_DISCOVERY=off` 回退全量 list | P0 |
@@ -161,10 +161,10 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 |----|------|--------|
 | C1 | 安装/修复只写入 **一个** server：`AT Series` | P0 |
 | C2 | args 指向稳定 hub 路径，而不是扩展版本目录 | P0 |
-| C3 | env 写入 `AT_SERIES_HOST_APP` | P0 |
+| C3 | env 写入 `AT_SERIES_HOST_APP` 及渐进发现/选择键；installer 将 `AT_SERIES_TOOL_SELECTION_IDLE_MS` 写成 `0`（覆盖 Hub 运行时默认 30s） | P0 |
 | C4 | 迁移/清理旧 `AT Terminal` / `AT JumpServer Terminal` 等本系列条目 | P0 |
 | C5 | 不删除用户第三方 MCP 服务器 | P0 |
-| C6 | autoApprove 默认仅 `risk=read` + `at_list_providers` | P0 |
+| C6 | autoApprove 默认仅五个 Hub 元工具；忽略 `registryTools` / 业务 `risk=read` | P0 |
 | C7 | 安装操作幂等 | P0 |
 | C8 | 提供显式 Uninstall AT Series MCP Config | P1 |
 | C9 | 提供显式 Repair Hub / Config | P1 |
@@ -216,6 +216,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 
 - `at_list_providers` 展示 plugin/bridge 健康、冲突、（如适用）hubTooOld  
 - 明确错误：无 Bridge、目标不在线、用户取消、校验失败  
+- Hub 将业务 `tools/call`（不含元工具）写入 `~/.at-series/logs/<hostApp>/` JSONL，供本机排障；不解析命令/SQL 以区分查询与修改  
 
 ---
 
@@ -229,7 +230,8 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 6. v1 全量重命名所有 AT Terminal 工具  
 7. token 定期轮转、请求签名、父进程绑定  
 8. 保留 `languageModelTools` 双轨  
-9. deactivate 时自动删除 hub.js 与 MCP 配置（避免误伤）  
+9. deactivate 时自动删除 hub.js、MCP 配置与 logs（避免误伤）  
+10. 在 Hub 内解析命令或 SQL 以区分查询与修改  
 
 ---
 
@@ -256,7 +258,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 5. Cursor 与 Kiro 同时运行时，各自 Agent 默认只看到本 IDE 的 Bridge  
 6. 扩展升级后，MCP 仍能启动（路径仍是 `~/.at-series/mcp/hub.js`）  
 7. 旧版本插件 activate 不会把新 Hub 降级覆盖  
-8. `run_*` / 写文件 / SQL 等 exec|write 工具默认不在 autoApprove，且插件内确认仍在  
+8. 业务工具（含 `risk=read`）默认不在 autoApprove；`run_*` / 写文件 / SQL 等 exec|write 须插件内确认仍在  
 9. 仓库中不再将 `languageModelTools` 与 per-plugin mcp-server 作为推荐入口  
 10. 新示例插件仅通过协议注册即可被聚合（可用 fixture/假 Bridge 测）  
 
@@ -314,7 +316,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 10. 变体 → 保留 base/mcp；JumpServer 可独立维护 Hub  
 11. 工程 → 独立 `@at-series/mcp-hub`，打进 VSIX 再同步  
 12. Bridge → health/tools/invoke；删除 per-plugin MCP 入口  
-13. 风险 → 插件声明三级；默认 autoApprove 仅 read  
+13. 风险 → 插件声明三级；installer autoApprove 仅 Hub 元工具（业务工具不论 risk 都不写入）  
 14. 生命周期 → 统一目录；deactivate 保守；显式卸载/修复  
 15. 多 IDE → hostApp 隔离；无 hostApp 忽略  
 16. 包边界 → 协议/注册表/Hub/publisher；不含业务 Bridge 框架  
@@ -327,7 +329,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 2. 分发 → npm 发版，插件 dependencies 引用  
 3. Bridge HTTP → **严格不进本仓**；插件各自实现（抽 Hub 的意义在聚合而非再造框架）  
 4. AGENTS 范围 → 本仓为主 + 两插件迁移检查清单  
-5. Installer → **本仓提供 helper**（写/修/卸/迁移/按 risk 算 autoApprove）  
+5. Installer → **本仓提供 helper**（写/修/卸/迁移；autoApprove 仅 Hub 元工具）  
 6. Skill → **单一** 系列 skill；旧插件 skill 删除或改指向  
 7. Installer IDE → v1：**Cursor + Kiro + Continue**  
 8. 同 semver → **仅 `bundleSha256` 不同才覆盖** hub.js  

@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| npm 包 | [`@at-series/mcp-hub`](https://www.npmjs.com/package/@at-series/mcp-hub) **`0.2.0`**（`packages/mcp-hub`） |
+| npm 包 | [`@at-series/mcp-hub`](https://www.npmjs.com/package/@at-series/mcp-hub) **`0.3.2`**（`packages/mcp-hub`） |
 | Bridge 规范 | [`docs/protocol/v1.md`](docs/protocol/v1.md)（对接真源，`protocolVersion: 1`） |
 | Hub 暴露规范 | [`docs/protocol/v2.md`](docs/protocol/v2.md)（渐进发现 / select / auto-clear） |
 | 系列 Skill | [`skills/super-ops`](skills/super-ops/SKILL.md)（**SuperOps**：discover → select → call + 运维规范） |
@@ -61,7 +61,7 @@ IDE MCP Client (Cursor / Kiro / Continue / …)
 |-----|------|------|
 | `AT_SERIES_TOOL_DISCOVERY` | `auto` | `auto` / `always` / `off` |
 | `AT_SERIES_TOOL_DISCOVERY_THRESHOLD` | `20` | `auto` 下超过该业务工具数才渐进 |
-| `AT_SERIES_TOOL_SELECTION_IDLE_MS` | `30000` | 选中空闲自动 clear；`0` 关闭 |
+| `AT_SERIES_TOOL_SELECTION_IDLE_MS` | `30000`（Hub 未设 env）；installer 写入 `0` | 选中空闲自动 clear；`0` 关闭 |
 | `AT_SERIES_TOOL_SELECTION_MAX_CALLS` | `0` | 业务调用次数预算；`0` 关闭 |
 
 **list ≠ ACL：** 未出现在 `tools/list` 的赢家工具，Hub 仍可路由 `tools/call`（部分 IDE 客户端会自行按 list 拦截）。
@@ -91,7 +91,7 @@ npm test   # 协议一致性、聚合选路、渐进暴露、选举、installer 
 
 1. Bridge：`127.0.0.1` + `x-at-series-token` + `GET /health` / `GET /tools` / `POST /invoke`
 2. `publish` 到 `~/.at-series/bridges/<hostApp>/<bridgeId>.json`（`protocolVersion: 1`，工具带 `risk`）
-3. MCP 变体：`syncHubBundle` + `ensureAtSeriesMcpConfig`（只写 **`AT Series`**）
+3. MCP 变体：先 `await syncHubBundle`（`bundlePath` = 扩展 `dist/hub.js`），再 `ensureAtSeriesMcpConfig`（只写 **`AT Series`**）
 4. deactivate：`unpublish`（不删 `hub.js`、不卸 MCP 配置）
 
 ### 依赖
@@ -103,22 +103,24 @@ npm install @at-series/mcp-hub
 ### activate 示例
 
 ```ts
+import * as vscode from 'vscode';
 import {
   FsBridgePublisher,
   syncHubBundle,
   ensureAtSeriesMcpConfig,
   hubJsPath,
   detectHostApp,
-  AT_SERIES_PROTOCOL_VERSION, // Bridge wire = 1
+  AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   type BridgeRegistryRecord,
   type ToolCatalogEntry
 } from '@at-series/mcp-hub';
 
 const bridgeId = crypto.randomUUID();
 const hostApp = detectHostApp({
-  appName: 'Cursor',
-  uriScheme: 'cursor',
-  extensionPath: 'C:/Users/you/.cursor/extensions/local.at-example-1.0.0'
+  appName: vscode.env.appName,
+  appRoot: vscode.env.appRoot,
+  uriScheme: vscode.env.uriScheme,
+  extensionPath: context.extensionPath
 });
 const tools: ToolCatalogEntry[] = [
   {
@@ -130,9 +132,10 @@ const tools: ToolCatalogEntry[] = [
   }
 ];
 
+const bundlePath = vscode.Uri.joinPath(context.extensionUri, 'dist', 'hub.js').fsPath;
 await syncHubBundle({
-  version: '0.2.0',
-  bundlePath: require.resolve('@at-series/mcp-hub/hub'),
+  version: hubPackageVersion, // from dist/hub-version.json — not a hardcoded stale semver
+  bundlePath,
   pluginId: 'at.example',
   pluginVersion: '1.2.3'
 });
@@ -145,7 +148,7 @@ await ensureAtSeriesMcpConfig({
 
 const publisher = new FsBridgePublisher({ bridgeId, hostApp });
 const record: BridgeRegistryRecord = {
-  protocolVersion: AT_SERIES_PROTOCOL_VERSION,
+  protocolVersion: AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   bridgeId,
   pluginId: 'at.example',
   pluginDisplayName: 'AT Example',
@@ -159,6 +162,8 @@ const record: BridgeRegistryRecord = {
 };
 await publisher.publish(record);
 ```
+
+打包进 VSIX、`uninstallAtSeriesMcpConfig`、Continue 的 `workspaceFolder` 约束、以及 `hostApp` → installer `target` 映射：见 [plugin-integration.md](docs/guides/plugin-integration.md)。
 
 **Hub 版本选举：** semver 更高 → 覆盖；同版本且 `bundleSha256` 不同 → 覆盖；同 hash → no-op；更低 → 禁止覆盖。
 

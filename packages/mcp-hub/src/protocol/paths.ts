@@ -4,6 +4,7 @@ import {
   AT_SERIES_ROOT_DIRNAME,
   AT_SERIES_BRIDGES_DIRNAME,
   AT_SERIES_MCP_DIRNAME,
+  AT_SERIES_LOGS_DIRNAME,
   AT_SERIES_HUB_FILENAME,
   AT_SERIES_HUB_VERSION_FILENAME,
   REGISTRY_PATH_SEGMENT_PATTERN
@@ -54,4 +55,38 @@ export function hubJsPath(home = os.homedir()): string {
 
 export function hubVersionPath(home = os.homedir()): string {
   return path.join(mcpDir(home), AT_SERIES_HUB_VERSION_FILENAME);
+}
+
+export function logsDir(home = os.homedir()): string {
+  return path.join(atSeriesRootDir(home), AT_SERIES_LOGS_DIRNAME);
+}
+
+export function logsDirForHostApp(
+  hostApp: string,
+  home = os.homedir()
+): string {
+  assertPathSegment('hostApp', hostApp);
+  return path.join(logsDir(home), hostApp);
+}
+
+const AGENT_OPS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+export function agentOpsLogPath(
+  hostApp: string,
+  dateStr: string,
+  pid: number,
+  home = os.homedir()
+): string {
+  if (!AGENT_OPS_DATE_PATTERN.test(dateStr)) {
+    throw new Error(
+      `Invalid dateStr ${JSON.stringify(dateStr)}: must match YYYY-MM-DD`
+    );
+  }
+  if (!Number.isInteger(pid) || pid < 0) {
+    throw new Error(`Invalid pid ${JSON.stringify(pid)}: must be an integer >= 0`);
+  }
+  return path.join(
+    logsDirForHostApp(hostApp, home),
+    `agent-ops-${dateStr}-${pid}.jsonl`
+  );
 }
