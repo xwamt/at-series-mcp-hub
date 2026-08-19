@@ -3,6 +3,12 @@ import {
   AT_SERIES_PROTOCOL_VERSION,
   AT_SERIES_BRIDGE_PROTOCOL_VERSION,
   AT_SERIES_HUB_PROTOCOL_VERSION,
+  AT_SERIES_LOGS_DIRNAME,
+  AT_SERIES_AUDIT_LOG_ENV,
+  AT_SERIES_AUDIT_RETENTION_DAYS_ENV,
+  AT_SERIES_AUDIT_MAX_FIELD_BYTES_ENV,
+  DEFAULT_AUDIT_RETENTION_DAYS,
+  DEFAULT_AUDIT_MAX_FIELD_BYTES,
   HUB_BUILTIN_TOOL_NAMES,
   MCP_SERVER_DISPLAY_NAME,
   normalizeToolRisk,
@@ -33,6 +39,19 @@ describe('protocol exports', () => {
   it('treats missing risk as exec (fail closed)', () => {
     expect(normalizeToolRisk(undefined)).toBe('exec');
     expect(isAutoApproveRisk(normalizeToolRisk(undefined))).toBe(false);
+  });
+
+  it('exports audit log filesystem and env constants', () => {
+    expect(AT_SERIES_LOGS_DIRNAME).toBe('logs');
+    expect(AT_SERIES_AUDIT_LOG_ENV).toBe('AT_SERIES_AUDIT_LOG');
+    expect(AT_SERIES_AUDIT_RETENTION_DAYS_ENV).toBe(
+      'AT_SERIES_AUDIT_RETENTION_DAYS'
+    );
+    expect(AT_SERIES_AUDIT_MAX_FIELD_BYTES_ENV).toBe(
+      'AT_SERIES_AUDIT_MAX_FIELD_BYTES'
+    );
+    expect(DEFAULT_AUDIT_RETENTION_DAYS).toBe(30);
+    expect(DEFAULT_AUDIT_MAX_FIELD_BYTES).toBe(4096);
   });
 
   it('exports detectHostApp for plugin host isolation', () => {

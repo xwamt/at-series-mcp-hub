@@ -2,6 +2,8 @@
  * stdout belongs to the JSON-RPC transport, so all diagnostics go to stderr.
  * MCP clients surface stderr in their server logs.
  */
+import { redactSecretsInText } from '../audit/sanitize';
+
 const LEVELS = ['silent', 'error', 'warn', 'info'] as const;
 export type LogLevel = (typeof LEVELS)[number];
 
@@ -30,5 +32,5 @@ export const hubLog = {
 /** Never let a bridge token reach a log line. */
 export function describeError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
-  return raw.replace(/([?&]token=|"token"\s*:\s*")[^&"\s]+/gi, '$1[REDACTED]');
+  return redactSecretsInText(raw);
 }

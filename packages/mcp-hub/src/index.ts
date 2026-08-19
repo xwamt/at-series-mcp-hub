@@ -2,7 +2,8 @@
  * Public API for `@at-series/mcp-hub`.
  *
  * Plugin authors typically need: protocol types, FsBridgePublisher, syncHubBundle,
- * ensureAtSeriesMcpConfig, and defaultAutoApproveToolNames.
+ * ensureAtSeriesMcpConfig / uninstallAtSeriesMcpConfig, and detectHostApp.
+ * Do not pass defaultAutoApproveToolNames into the installer — autoApprove is Hub meta only.
  * Normative contract: docs/protocol/v1.md
  */
 

@@ -2,7 +2,7 @@
 
 Shared AT Series MCP Hub runtime, registry publisher, hub bundle sync, and IDE MCP config installer helpers.
 
-**Current version:** `0.2.0` — Hub protocol surface **2** (progressive tool discovery); Bridge wire remains **1**.
+**Current version:** `0.3.2` — Hub protocol surface **2** (progressive tool discovery); Bridge wire remains **1**.
 
 ## Install
 
@@ -18,15 +18,18 @@ npm install @at-series/mcp-hub
 | `FsBridgePublisher` | Publish / heartbeat / unpublish registry records |
 | `syncHubBundle` | Elect `~/.at-series/mcp/hub.js` by semver + hash |
 | `ensureAtSeriesMcpConfig` / `uninstallAtSeriesMcpConfig` | Write/repair/remove the single `AT Series` MCP entry |
-| `defaultAutoApproveToolNames` | All Hub meta-tools + `risk=read` registry tools |
+| `defaultAutoApproveToolNames` | Optional helper: Hub meta-tools + `risk=read` registry tools. **Installer does not use this** (autoApprove is meta-only) |
+| `detectHostApp` | `detectHostApp({ appName?, appRoot?, uriScheme?, extensionPath? })` → `hostApp` slug |
 | `createHubRuntime` | stdio Hub (packaged as `hub.js`) |
 
-Hub bundle entry for packaging:
+Hub bundle entry for **build-time** resolve / copy into the VSIX `dist/`:
 
 ```ts
 require.resolve('@at-series/mcp-hub/hub')
-// -> dist/hub.js
+// -> package dist/hub.js (use at pack time; production activate should use extension dist/hub.js)
 ```
+
+See [`docs/guides/plugin-integration.md`](../../docs/guides/plugin-integration.md) for `copy-hub.mjs` and `await syncHubBundle` **before** `ensureAtSeriesMcpConfig`.
 
 ## Progressive discovery (Hub v2)
 

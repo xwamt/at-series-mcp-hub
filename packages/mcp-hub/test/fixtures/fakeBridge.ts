@@ -29,6 +29,8 @@ export type FakeBridgeOptions = {
     | { status: number; body: BridgeInvokeSuccess | BridgeErrorBody }
     | BridgeInvokeSuccess
     | BridgeErrorBody;
+  /** Abort the invoke socket (transport failure tests). */
+  destroyOnInvoke?: boolean;
 };
 
 export type FakeBridgeHandle = {
@@ -147,6 +149,10 @@ export async function startFakeBridge(
     }
 
     if (method === 'POST' && url.pathname === '/invoke') {
+      if (options.destroyOnInvoke) {
+        req.socket.destroy();
+        return;
+      }
       let parsed: unknown;
       try {
         parsed = await readJsonBody(req);

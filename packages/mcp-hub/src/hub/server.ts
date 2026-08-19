@@ -1,4 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import os from 'node:os';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AuditLogger } from '../audit/logger';
+import type { AuditRecord, AuditStatus } from '../audit/types';
+import { sanitizeForAudit, sanitizePreview } from '../audit/sanitize';
 import {
   BridgeHttpError,
   bridgeGetHealth,
@@ -9,13 +14,15 @@ import type {
   HostApp,
   ListProvidersResult,
   ToolCatalogEntry,
-  ToolDiscoveryMode
+  ToolDiscoveryMode,
+  ToolRisk
 } from '../protocol/index';
 import {
   AT_SERIES_TOOL_DISCOVERY_ENV,
   AT_SERIES_TOOL_DISCOVERY_THRESHOLD_ENV,
   AT_SERIES_TOOL_SELECTION_IDLE_MS_ENV,
-  AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV
+  AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV,
+  normalizeToolRisk
 } from '../protocol/index';
 import { listBridgeRecords } from '../registry/read';
 import {
@@ -162,6 +169,55 @@ function errorText(code: string, message: string): {
   };
 }
 
+type CallToolResult = {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+};
+
+function auditErrorFromResult(
+  result: CallToolResult
+): { code: string; message: string } | undefined {
+  if (result.isError !== true) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(result.content[0]?.text ?? '');
+    const err =
+      parsed && typeof parsed === 'object'
+        ? (parsed as { error?: { code?: unknown; message?: unknown } }).error
+        : undefined;
+    if (
+      err &&
+      typeof err.code === 'string' &&
+      typeof err.message === 'string'
+    ) {
+      return { code: err.code, message: sanitizePreview(err.message) };
+    }
+  } catch {
+    // Fall through to a generic error.
+  }
+  return { code: 'INTERNAL_ERROR', message: 'Tool call failed' };
+}
+
+function auditStatusFromResult(result: CallToolResult): AuditStatus {
+  const err = auditErrorFromResult(result);
+  if (result.isError !== true) {
+    return 'success';
+  }
+  switch (err?.code) {
+    case 'USER_CANCELLED':
+      return 'cancelled';
+    case 'NOT_FOUND':
+      return 'not_found';
+    case 'VALIDATION_ERROR':
+      return 'validation_error';
+    case 'UNAVAILABLE':
+      return 'unavailable';
+    default:
+      return 'error';
+  }
+}
+
 export async function createHubRuntime(options: {
   home?: string;
   hostApp: string;
@@ -193,6 +249,10 @@ export async function createHubRuntime(options: {
     options.selectionMaxCalls ??
       process.env[AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV]
   );
+  const auditLogger = AuditLogger.fromEnv({
+    home: options.home ?? os.homedir(),
+    hostApp: options.hostApp
+  });
   let healthyBridges: HealthyBridge[] = [];
   let unhealthyBridges: UnhealthyBridgeInput[] = [];
   let catalog: AggregatedCatalog = {
@@ -405,10 +465,7 @@ export async function createHubRuntime(options: {
   async function callTool(
     name: string,
     args: Record<string, unknown>
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>;
-    isError?: boolean;
-  }> {
+  ): Promise<CallToolResult> {
     await refreshCatalog();
     maybeAutoClearSelection();
 
@@ -549,64 +606,119 @@ export async function createHubRuntime(options: {
       };
     }
 
-    const winner = catalog.winners.get(name);
-    if (!winner) {
-      return errorText('NOT_FOUND', `Unknown tool: ${name}`);
-    }
+    const started = Date.now();
+    const traceId = `at-trace-${randomUUID()}`;
+    let attemptCount = 0;
+    let lastBridgeId: string | undefined;
+    let pluginId: string | undefined;
+    let risk: ToolRisk | undefined;
+    let result: CallToolResult | undefined;
 
-    businessCallsSinceSelect += 1;
-    touchSelectionActivity();
+    try {
+      const winner = catalog.winners.get(name);
+      if (!winner) {
+        result = errorText('NOT_FOUND', `Unknown tool: ${name}`);
+        return result;
+      }
+      pluginId = winner.pluginId;
+      const entry = catalog.tools.find((tool) => tool.name === name);
+      risk = normalizeToolRisk(entry?.risk);
 
-    const ordered = orderBridgesForTool(name, winner.bridges);
-    if (ordered.length === 0) {
-      maybeAutoClearSelection();
-      return errorText('NOT_FOUND', `No healthy bridge for tool: ${name}`);
-    }
+      businessCallsSinceSelect += 1;
+      touchSelectionActivity();
 
-    const maxAttempts = Math.min(ordered.length, 2);
-    let lastTransportError: unknown;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const bridge = ordered[attempt]!;
-      try {
-        const response = await bridgeInvoke(bridge.record, {
-          name,
-          arguments: args
-        });
-
-        if ('error' in response) {
-          maybeAutoClearSelection();
-          return {
-            content: [{ type: 'text', text: JSON.stringify(response) }],
-            isError: true
-          };
-        }
-
+      const ordered = orderBridgesForTool(name, winner.bridges);
+      if (ordered.length === 0) {
         maybeAutoClearSelection();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response.result)
-            }
-          ]
-        };
+        result = errorText('NOT_FOUND', `No healthy bridge for tool: ${name}`);
+        return result;
+      }
+
+      const maxAttempts = Math.min(ordered.length, 2);
+      let lastTransportError: unknown;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const bridge = ordered[attempt]!;
+        attemptCount += 1;
+        lastBridgeId = bridge.record.bridgeId;
+        try {
+          const response = await bridgeInvoke(bridge.record, {
+            name,
+            arguments: args
+          });
+
+          if ('error' in response) {
+            maybeAutoClearSelection();
+            result = {
+              content: [{ type: 'text', text: JSON.stringify(response) }],
+              isError: true
+            };
+            return result;
+          }
+
+          maybeAutoClearSelection();
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(response.result)
+              }
+            ]
+          };
+          return result;
+        } catch (err) {
+          lastTransportError = err;
+        }
+      }
+
+      maybeAutoClearSelection();
+
+      if (lastTransportError instanceof BridgeHttpError) {
+        result = errorText(lastTransportError.code, lastTransportError.message);
+        return result;
+      }
+
+      const message =
+        lastTransportError instanceof Error
+          ? lastTransportError.message
+          : 'Bridge invoke failed';
+      result = errorText('UNAVAILABLE', message);
+      return result;
+    } finally {
+      const finished =
+        result ?? errorText('INTERNAL_ERROR', 'Tool call failed');
+      const error = auditErrorFromResult(finished);
+      const record: AuditRecord = {
+        traceId,
+        timestamp: new Date().toISOString(),
+        hostApp: options.hostApp,
+        hubPid: process.pid,
+        pluginId,
+        bridgeId: lastBridgeId,
+        toolName: name,
+        risk,
+        attemptCount,
+        durationMs: Math.max(0, Date.now() - started),
+        status: auditStatusFromResult(finished),
+        error,
+        params: sanitizeForAudit(args, auditLogger.maxFieldBytes) as Record<
+          string,
+          unknown
+        >,
+        responseSummary: {
+          isError: finished.isError === true,
+          preview: sanitizePreview(
+            finished.content[0]?.text ?? '',
+            auditLogger.maxFieldBytes
+          )
+        }
+      };
+      try {
+        auditLogger.log(record);
       } catch (err) {
-        lastTransportError = err;
+        hubLog.error(`audit log failed: ${describeError(err)}`);
       }
     }
-
-    maybeAutoClearSelection();
-
-    if (lastTransportError instanceof BridgeHttpError) {
-      return errorText(lastTransportError.code, lastTransportError.message);
-    }
-
-    const message =
-      lastTransportError instanceof Error
-        ? lastTransportError.message
-        : 'Bridge invoke failed';
-    return errorText('UNAVAILABLE', message);
   }
 
   async function close(): Promise<void> {
@@ -617,6 +729,7 @@ export async function createHubRuntime(options: {
       clearInterval(healthTimer);
       healthTimer = undefined;
     }
+    await auditLogger.close();
   }
 
   // Establish fingerprint baseline before watch/timers so startup is quiet.

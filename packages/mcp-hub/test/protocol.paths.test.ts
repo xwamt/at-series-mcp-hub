@@ -6,7 +6,10 @@ import {
   bridgesDirForHostApp,
   bridgeRecordPath,
   hubJsPath,
-  hubVersionPath
+  hubVersionPath,
+  logsDir,
+  logsDirForHostApp,
+  agentOpsLogPath
 } from '../src/protocol/paths';
 
 describe('paths', () => {
@@ -28,6 +31,31 @@ describe('paths', () => {
     expect(hubJsPath()).toBe(path.join(os.homedir(), '.at-series', 'mcp', 'hub.js'));
     expect(hubVersionPath()).toBe(
       path.join(os.homedir(), '.at-series', 'mcp', 'hub-version.json')
+    );
+  });
+
+  it('points agent-ops logs under logs/<hostApp>/', () => {
+    expect(logsDir('/home/u')).toBe(path.join('/home/u', '.at-series', 'logs'));
+    expect(logsDirForHostApp('cursor', '/home/u')).toBe(
+      path.join('/home/u', '.at-series', 'logs', 'cursor')
+    );
+    expect(agentOpsLogPath('cursor', '2026-08-19', 44102, '/home/u')).toBe(
+      path.join(
+        '/home/u',
+        '.at-series',
+        'logs',
+        'cursor',
+        'agent-ops-2026-08-19-44102.jsonl'
+      )
+    );
+  });
+
+  it('rejects a non-date dateStr and a non-integer pid in agentOpsLogPath', () => {
+    expect(() => agentOpsLogPath('cursor', '../evil', 1, '/home/u')).toThrow(
+      /dateStr/
+    );
+    expect(() => agentOpsLogPath('cursor', '2026-08-19', 1.5, '/home/u')).toThrow(
+      /pid/
     );
   });
 });
