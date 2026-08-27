@@ -99,6 +99,8 @@
 | **5** | 抽取共享包 | 阶段 4 验收后编写 | 新建 `at-series-plugin-kit` + 三插件 | `@at-series/webview-terminal`、`@at-series/vscode-kit` 先行；`plugin-kit` 需先过 D26 边界决策 |
 | **6** | 性能与体验 | 阶段 5 验收后编写 | terminal / jumpserver / grafana | T7/T8/T13/J7/J8/G5 + 开启 minify |
 
+Hub 运行时热路径（每次 `tools/list`/`tools/call` 同步全量探测、僵死桥 +2s 打进 p50）与插件 minify / 抽包无关，分析见 [`docs/reports/2026-08-27-hub-runtime-performance.md`](../../reports/2026-08-27-hub-runtime-performance.md)。该切片可在本仓单独推进，不必等阶段 5。
+
 ### 4.1 为什么是这个顺序
 
 - **0 在最前**：三个插件当前 `tsc --noEmit` 全部失败（`node_modules/@at-series` 是空目录），测试因缺 `@rollup/rollup-darwin-arm64` 跑不起来；`at-terminal-series` 的 158 个文件 diff 里只有 20 个是真实改动。在此状态下改任何东西，既无法 review 也无法验证回归。这一阶段不产出功能价值，但决定后面每一步是否可信。
