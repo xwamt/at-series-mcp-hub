@@ -9,6 +9,15 @@ import type {
 import { bridgeRecordPath, bridgesDirForHostApp } from '../protocol/paths';
 
 export class FsBridgePublisher implements BridgePublisher {
+  /**
+   * Copy of the record as last written to disk by this instance. Heartbeats
+   * run every ≤30 s for the life of the extension host; re-reading and
+   * re-parsing our own file each time bought nothing, since this publisher is
+   * the only legitimate writer of its `<bridgeId>.json`. `undefined` (never
+   * published here, or after unpublish) falls back to reading the disk.
+   */
+  private lastWritten: BridgeRegistryRecord | undefined;
+
   constructor(
     private readonly opts: {
       home?: string;
@@ -38,14 +47,14 @@ export class FsBridgePublisher implements BridgePublisher {
     }
 
     await ensureDir(bridgesDirForHostApp(this.opts.hostApp, this.home));
-    await atomicWriteFile(this.recordPath, JSON.stringify(record, null, 2));
+    await this.write(record);
   }
 
   async updateTools(tools: ToolCatalogEntry[]): Promise<void> {
     const record = await this.readExisting();
     record.tools = tools;
     record.updatedAt = Date.now();
-    await atomicWriteFile(this.recordPath, JSON.stringify(record, null, 2));
+    await this.write(record);
   }
 
   async heartbeat(patch?: {
@@ -60,10 +69,11 @@ export class FsBridgePublisher implements BridgePublisher {
         ...patch.capabilities
       };
     }
-    await atomicWriteFile(this.recordPath, JSON.stringify(record, null, 2));
+    await this.write(record);
   }
 
   async unpublish(): Promise<void> {
+    this.lastWritten = undefined;
     try {
       await fs.unlink(this.recordPath);
     } catch (err) {
@@ -74,7 +84,24 @@ export class FsBridgePublisher implements BridgePublisher {
     }
   }
 
+  /**
+   * Registry files stay pretty-printed (protocol v1 §5 registry format —
+   * this is an on-disk debugging surface, not MCP wire traffic). Caching the
+   * parse of the exact serialized bytes keeps the cache provably identical to
+   * what is on disk, with no aliasing into caller-owned objects.
+   */
+  private async write(record: BridgeRegistryRecord): Promise<void> {
+    const serialized = JSON.stringify(record, null, 2);
+    await atomicWriteFile(this.recordPath, serialized);
+    this.lastWritten = JSON.parse(serialized) as BridgeRegistryRecord;
+  }
+
   private async readExisting(): Promise<BridgeRegistryRecord> {
+    if (this.lastWritten !== undefined) {
+      // Fresh clone: callers mutate the result, and a failed write afterwards
+      // must not leave those mutations behind in the cache.
+      return JSON.parse(JSON.stringify(this.lastWritten)) as BridgeRegistryRecord;
+    }
     const text = await fs.readFile(this.recordPath, 'utf8');
     return JSON.parse(text) as BridgeRegistryRecord;
   }

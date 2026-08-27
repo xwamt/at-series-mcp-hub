@@ -3,6 +3,7 @@ import {
   DEFAULT_TOOL_SELECTION_IDLE_MS,
   DEFAULT_TOOL_SELECTION_MAX_CALLS,
   HUB_BUILTIN_TOOL_NAMES,
+  SEARCH_DESCRIPTION_MAX_CHARS,
   type SelectToolsResult,
   type ToolCatalogEntry,
   type ToolDiscoveryMode,
@@ -117,6 +118,8 @@ export function searchTools(
     ? Math.min(50, Math.max(1, options.limit))
     : 1;
 
+  // Matching runs on the full description; only the returned hit is
+  // truncated (v2 §3.2). at_get_tool still serves the complete text.
   return catalog
     .filter(
       ({ entry, pluginId }) =>
@@ -129,7 +132,7 @@ export function searchTools(
     .map(({ entry, pluginId }) => ({
       name: entry.name,
       title: entry.title,
-      description: entry.description,
+      description: entry.description.slice(0, SEARCH_DESCRIPTION_MAX_CHARS),
       risk: entry.risk,
       pluginId
     }));

@@ -1,3 +1,4 @@
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,6 +59,126 @@ describe('AuditLogger', () => {
       toolName: 'run_remote_command',
       params: { command: 'echo\nnewline' }
     });
+  });
+
+  it('redacts unsanitized params, previews, and error messages on the write path', async () => {
+    const input = record({
+      status: 'error',
+      error: { code: 'UPSTREAM_ERROR', message: 'Authorization: supervalue' },
+      params: { token: 'secret-value', command: 'ls' },
+      responseSummary: { isError: true, preview: 'Bearer abc' }
+    });
+    const logger = new AuditLogger({
+      enabled: true,
+      home,
+      hostApp: 'cursor',
+      pid: 21,
+      now: () => new Date(2026, 7, 19, 12, 0, 0)
+    });
+    logger.log(input);
+    await logger.close();
+
+    const body = await fs.readFile(
+      agentOpsLogPath('cursor', '2026-08-19', 21, home),
+      'utf8'
+    );
+    expect(body).not.toContain('secret-value');
+    expect(body).not.toContain('Bearer abc');
+    expect(body).not.toContain('supervalue');
+    const parsed = JSON.parse(body.trim());
+    expect(parsed.params).toEqual({ token: '[REDACTED]', command: 'ls' });
+    expect(parsed.responseSummary).toEqual({
+      isError: true,
+      preview: 'Bearer [REDACTED]'
+    });
+    expect(parsed.error).toEqual({
+      code: 'UPSTREAM_ERROR',
+      message: 'Authorization: [REDACTED]'
+    });
+
+    // The caller's record must not be mutated by the async sanitization.
+    expect(input.params).toEqual({ token: 'secret-value', command: 'ls' });
+    expect(input.responseSummary).toEqual({
+      isError: true,
+      preview: 'Bearer abc'
+    });
+    expect(input.error).toEqual({
+      code: 'UPSTREAM_ERROR',
+      message: 'Authorization: supervalue'
+    });
+  });
+
+  it('truncates oversized unsanitized fields using maxFieldBytes', async () => {
+    const big = 'a'.repeat(5000);
+    const logger = new AuditLogger({
+      enabled: true,
+      home,
+      hostApp: 'cursor',
+      pid: 22,
+      maxFieldBytes: 512,
+      now: () => new Date(2026, 7, 19, 12, 0, 0)
+    });
+    logger.log(record({ params: { content: big } }));
+    await logger.close();
+
+    const body = await fs.readFile(
+      agentOpsLogPath('cursor', '2026-08-19', 22, home),
+      'utf8'
+    );
+    const parsed = JSON.parse(body.trim());
+    expect(parsed.params.content).toContain('[TRUNCATED: total 5000 bytes, sha256=');
+    expect(Buffer.byteLength(parsed.params.content, 'utf8')).toBeLessThan(5000);
+  });
+
+  it('log() returns and queues before the write completes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realCreate = fsSync.createWriteStream;
+    const spy = vi
+      .spyOn(fsSync, 'createWriteStream')
+      .mockImplementation((...args: Parameters<typeof fsSync.createWriteStream>) => {
+        const stream = realCreate(...args);
+        const realWrite = stream.write.bind(stream);
+        // Delay every write callback until the gate opens.
+        stream.write = ((chunk: never, cb: (err?: Error | null) => void) => {
+          void gate.then(() => realWrite(chunk, cb));
+          return true;
+        }) as typeof stream.write;
+        return stream;
+      });
+    try {
+      const logger = new AuditLogger({
+        enabled: true,
+        home,
+        hostApp: 'cursor',
+        pid: 31,
+        now: () => new Date(2026, 7, 19, 12, 0, 0)
+      });
+      const file = agentOpsLogPath('cursor', '2026-08-19', 31, home);
+      logger.log(record({ toolName: 'slow' }));
+      // log() already returned; the async chain has not even opened the file.
+      expect(fsSync.existsSync(file)).toBe(false);
+
+      let flushed = false;
+      const done = logger.flush().then(() => {
+        flushed = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      // flush() cannot resolve while the write is gated, so log() clearly
+      // did not wait for the write to finish.
+      expect(flushed).toBe(false);
+      release();
+      await done;
+      expect(flushed).toBe(true);
+      await logger.close();
+
+      const body = await fs.readFile(file, 'utf8');
+      expect(JSON.parse(body.trim()).toolName).toBe('slow');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rotates to a new file when the local date changes', async () => {

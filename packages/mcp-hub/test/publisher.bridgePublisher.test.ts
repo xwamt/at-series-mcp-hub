@@ -177,6 +177,98 @@ describe('FsBridgePublisher', () => {
     expect(parsed.updatedAt).toBe(9_999);
   });
 
+  it('heartbeat after publish does not read the record back from disk', async () => {
+    const publisher = new FsBridgePublisher({
+      home,
+      bridgeId: 'bridge-a',
+      hostApp: 'cursor'
+    });
+    await publisher.publish(
+      baseRecord({ updatedAt: 100, capabilities: { connectedTargets: 1 } })
+    );
+
+    // Corrupt the on-disk copy: a heartbeat that re-read it would blow up on
+    // JSON.parse. The cached-record path must not care.
+    const filePath = bridgeRecordPath('cursor', 'bridge-a', home);
+    await fs.writeFile(filePath, 'definitely not json', 'utf8');
+
+    await publisher.heartbeat({ updatedAt: 9_999 });
+
+    const parsed = JSON.parse(
+      await fs.readFile(filePath, 'utf8')
+    ) as BridgeRegistryRecord;
+    expect(parsed.updatedAt).toBe(9_999);
+    expect(parsed.bridgeId).toBe('bridge-a');
+    expect(parsed.capabilities).toEqual({ connectedTargets: 1 });
+  });
+
+  it('updateTools after publish does not read the record back from disk', async () => {
+    const publisher = new FsBridgePublisher({
+      home,
+      bridgeId: 'bridge-a',
+      hostApp: 'cursor'
+    });
+    await publisher.publish(baseRecord({ updatedAt: 100 }));
+
+    const filePath = bridgeRecordPath('cursor', 'bridge-a', home);
+    await fs.writeFile(filePath, 'definitely not json', 'utf8');
+
+    const tools: ToolCatalogEntry[] = [
+      {
+        name: 'list_ssh_servers',
+        title: 'List SSH Servers',
+        description: 'List servers',
+        risk: 'read',
+        inputSchema: { type: 'object', properties: {} }
+      }
+    ];
+    await publisher.updateTools(tools);
+
+    const parsed = JSON.parse(
+      await fs.readFile(filePath, 'utf8')
+    ) as BridgeRegistryRecord;
+    expect(parsed.tools).toEqual(tools);
+    expect(parsed.token).toBe('t'.repeat(32));
+  });
+
+  it('heartbeat falls back to reading the disk when this instance never wrote', async () => {
+    const original = new FsBridgePublisher({
+      home,
+      bridgeId: 'bridge-a',
+      hostApp: 'cursor'
+    });
+    await original.publish(baseRecord({ updatedAt: 100 }));
+
+    // A fresh instance (e.g. after an extension host restart) has no cache
+    // and must pick the record up from disk.
+    const restarted = new FsBridgePublisher({
+      home,
+      bridgeId: 'bridge-a',
+      hostApp: 'cursor'
+    });
+    await restarted.heartbeat({ updatedAt: 4_242 });
+
+    const parsed = JSON.parse(
+      await fs.readFile(bridgeRecordPath('cursor', 'bridge-a', home), 'utf8')
+    ) as BridgeRegistryRecord;
+    expect(parsed.updatedAt).toBe(4_242);
+    expect(parsed.token).toBe('t'.repeat(32));
+  });
+
+  it('unpublish clears the cache so a later heartbeat sees the missing file', async () => {
+    const publisher = new FsBridgePublisher({
+      home,
+      bridgeId: 'bridge-a',
+      hostApp: 'cursor'
+    });
+    await publisher.publish(baseRecord());
+    await publisher.unpublish();
+
+    await expect(publisher.heartbeat()).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+  });
+
   it('unpublish deletes own file only', async () => {
     const publisher = new FsBridgePublisher({
       home,

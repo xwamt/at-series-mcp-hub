@@ -118,6 +118,70 @@ describe('withFileLock', () => {
     );
   });
 
+  it('immediately steals a fresh lock whose recorded pid is dead', async () => {
+    // Protocol v1 §8.6: a crashed holder must not wedge waiters for the full
+    // staleness window. acquiredAt is brand new; only the dead pid frees it.
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: 999_999, acquiredAt: Date.now() }),
+      'utf8'
+    );
+
+    const started = Date.now();
+    await expect(
+      withFileLock(lockPath, async () => 'ran', { timeoutMs: 200 })
+    ).resolves.toBe('ran');
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1234],
+    ['fractional', 3.14],
+    ['a string', '123']
+  ])('treats a fresh lock recording %s as pid as stale', async (_label, pid) => {
+    // Invalid pids are never signalled (kill(0)/kill(-n) hit process groups);
+    // they simply count as dead, so the lock is reclaimable.
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid, acquiredAt: Date.now() }),
+      'utf8'
+    );
+
+    await expect(
+      withFileLock(lockPath, async () => 'ran', { timeoutMs: 200 })
+    ).resolves.toBe('ran');
+  });
+
+  it.skipIf(isWindows)(
+    'does not steal a fresh lock whose pid exists but is not signalable',
+    async () => {
+      // pid 1 is init: kill(1, 0) yields EPERM for a non-root test run (and
+      // plain success under root), both of which must count as "alive".
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 1, acquiredAt: Date.now() }),
+        'utf8'
+      );
+
+      await expect(
+        withFileLock(lockPath, async () => 'ran', { timeoutMs: 150 })
+      ).rejects.toThrow(/lock/i);
+    }
+  );
+
+  it('still steals an expired lock even when its pid is alive', async () => {
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, acquiredAt: Date.now() - 300_000 }),
+      'utf8'
+    );
+
+    await expect(withFileLock(lockPath, async () => 'ran')).resolves.toBe(
+      'ran'
+    );
+  });
+
   it('gives up instead of hanging when a live lock is never released', async () => {
     await fs.writeFile(
       lockPath,

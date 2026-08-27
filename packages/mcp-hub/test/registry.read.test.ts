@@ -118,6 +118,45 @@ describe('listBridgeRecords', () => {
     expect(records.map((r) => r.bridgeId)).toEqual(['ok']);
   });
 
+  it('keeps records in readdir relative order with invalid files skipped', async () => {
+    // Hub conflict adjudication relies on a stable record order; the parallel
+    // read must preserve the readdir order the sequential loop had.
+    const ids = ['b', 'a', 'e', 'c', 'd'];
+    for (const id of ids) {
+      await writeRecord(home, 'cursor', `${id}.json`, validRecord({ bridgeId: id }));
+    }
+    await writeRecord(home, 'cursor', 'broken.json', '{not-json');
+    await writeRecord(home, 'cursor', 'notes.txt', 'not a record');
+
+    const dir = path.join(home, '.at-series', 'bridges', 'cursor');
+    const expected = (await fs.readdir(dir))
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => path.basename(name, '.json'))
+      .filter((id) => ids.includes(id));
+
+    const records = await listBridgeRecords({ hostApp: 'cursor', home });
+    expect(records.map((r) => r.bridgeId)).toEqual(expected);
+    expect(records).toHaveLength(ids.length);
+  });
+
+  it('aggregates a large directory without losing or duplicating records', async () => {
+    const count = 40;
+    await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        writeRecord(
+          home,
+          'cursor',
+          `bridge-${String(i).padStart(2, '0')}.json`,
+          validRecord({ bridgeId: `bridge-${String(i).padStart(2, '0')}` })
+        )
+      )
+    );
+
+    const records = await listBridgeRecords({ hostApp: 'cursor', home });
+    expect(records).toHaveLength(count);
+    expect(new Set(records.map((r) => r.bridgeId)).size).toBe(count);
+  });
+
   it('skips a record whose endpoints escape the Bridge path space', async () => {
     await writeRecord(
       home,

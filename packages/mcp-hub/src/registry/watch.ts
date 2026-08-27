@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { bridgesDirForHostApp } from '../protocol/paths';
 
 export type WatchBridgeRegistryOptions = {
@@ -16,6 +17,47 @@ export type WatchBridgeRegistryHandle = {
   /** Which notification strategy is active. */
   mode: 'watch' | 'poll';
 };
+
+/**
+ * Snapshot of the registry directory's `.json` entries (name + mtime + size),
+ * per protocol v1 §8.4. Polling compares fingerprints so an unchanged
+ * directory does not fire `onChange` every interval — before this, every poll
+ * tick triggered a full catalog refresh (readdir + parse + HTTP probes).
+ *
+ * Sync on purpose: the baseline is taken before `watchBridgeRegistry` returns
+ * so a write that lands right after cannot hide inside an async first
+ * snapshot; a registry directory holds a handful of small files, so the
+ * blocking cost per tick is negligible on this fallback path.
+ */
+function directoryFingerprint(dir: string): string {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    // Missing or unreadable directory reads the same as empty: its later
+    // reappearance (or the files inside) is the change we want to report.
+    return '';
+  }
+
+  const parts: string[] = [];
+  for (const name of names) {
+    if (path.extname(name).toLowerCase() !== '.json') {
+      continue;
+    }
+    try {
+      const stat = fs.statSync(path.join(dir, name));
+      parts.push(`${name}\u0000${stat.mtimeMs}\u0000${stat.size}`);
+    } catch {
+      // Deleted between readdir and stat; record the name so the next tick
+      // (where it is fully gone) still registers as a change.
+      parts.push(`${name}\u0000gone`);
+    }
+  }
+  // readdir order is filesystem-dependent; sort so ordering noise never
+  // masquerades as a change.
+  parts.sort();
+  return parts.join('\n');
+}
 
 /**
  * Watch `~/.at-series/bridges/<hostApp>/` for create/update/delete.
@@ -54,6 +96,22 @@ export function watchBridgeRegistry(
     }, debounceMs);
   };
 
+  // Poll ticks fire onChange only when the fingerprint moved. Native watch
+  // events are NOT filtered through the fingerprint: an atomic temp+rename
+  // produces events whose net stat delta can be invisible, and the event
+  // itself is already proof that something happened.
+  const startPolling = (): void => {
+    mode = 'poll';
+    let lastFingerprint = directoryFingerprint(dir);
+    pollTimer = setInterval(() => {
+      const fingerprint = directoryFingerprint(dir);
+      if (fingerprint !== lastFingerprint) {
+        lastFingerprint = fingerprint;
+        schedule();
+      }
+    }, pollIntervalMs);
+  };
+
   try {
     watcher = fs.watch(dir, () => {
       schedule();
@@ -69,13 +127,11 @@ export function watchBridgeRegistry(
         // ignore
       }
       watcher = undefined;
-      mode = 'poll';
-      pollTimer = setInterval(schedule, pollIntervalMs);
+      startPolling();
     });
     mode = 'watch';
   } catch {
-    mode = 'poll';
-    pollTimer = setInterval(schedule, pollIntervalMs);
+    startPolling();
   }
 
   return {

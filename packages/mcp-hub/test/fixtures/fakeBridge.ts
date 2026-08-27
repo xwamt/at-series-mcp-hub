@@ -22,6 +22,8 @@ export type FakeBridgeOptions = {
   tools?: ToolCatalogEntry[];
   /** Optional hook before /health responds (for refresh-race tests). */
   beforeHealth?: () => void | Promise<void>;
+  /** Optional hook before /tools responds (for parallel-probe tests). */
+  beforeTools?: () => void | Promise<void>;
   /** Custom invoke handler; default echoes success for known tools. */
   onInvoke?: (
     req: BridgeInvokeRequest
@@ -64,6 +66,11 @@ function sendJson(
   status: number,
   body: unknown
 ): void {
+  // A hook may delay past the Hub's probe timeout; by then the client has
+  // aborted and writing headers to the dead socket would throw in the fixture.
+  if (res.destroyed || res.writableEnded || res.socket?.destroyed) {
+    return;
+  }
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -140,6 +147,11 @@ export async function startFakeBridge(
     }
 
     if (method === 'GET' && url.pathname === '/tools') {
+      try {
+        await options.beforeTools?.();
+      } catch {
+        // Ignore hook failures; still return the catalog for fixture simplicity.
+      }
       const body: BridgeToolsResponse = {
         protocolVersion: AT_SERIES_BRIDGE_PROTOCOL_VERSION,
         tools

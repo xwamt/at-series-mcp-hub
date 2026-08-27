@@ -16,6 +16,7 @@ import {
   logsDir,
   logsDirForHostApp
 } from '../protocol/paths';
+import { sanitizeForAudit, sanitizePreview } from './sanitize';
 import type { AuditRecord } from './types';
 
 const MAX_QUEUED = 100;
@@ -156,6 +157,10 @@ export class AuditLogger {
     if (this.dead) {
       return;
     }
+    // Redaction runs on the async write path (v1 §3.4): it must complete
+    // before the line is appended, and must never touch the caller's record
+    // (callers may still hold the raw args reference).
+    const sanitized = this.sanitizeRecord(record);
     const dateStr = localDateStr(this.now());
     if (this.stream && this.streamDate !== dateStr) {
       await this.endCurrentStream();
@@ -173,7 +178,31 @@ export class AuditLogger {
         hubLog.error(`audit log cleanup failed: ${describeError(err)}`);
       });
     }
-    await this.writeLine(`${JSON.stringify(record)}\n`);
+    await this.writeLine(`${JSON.stringify(sanitized)}\n`);
+  }
+
+  private sanitizeRecord(record: AuditRecord): AuditRecord {
+    const sanitized: AuditRecord = {
+      ...record,
+      params: sanitizeForAudit(record.params, this.maxFieldBytes) as Record<
+        string,
+        unknown
+      >,
+      responseSummary: {
+        isError: record.responseSummary.isError,
+        preview: sanitizePreview(
+          record.responseSummary.preview,
+          this.maxFieldBytes
+        )
+      }
+    };
+    if (record.error) {
+      sanitized.error = {
+        code: record.error.code,
+        message: sanitizePreview(record.error.message, this.maxFieldBytes)
+      };
+    }
+    return sanitized;
   }
 
   private async openStream(dateStr: string): Promise<void> {

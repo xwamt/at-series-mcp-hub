@@ -281,10 +281,12 @@ describe('META_TOOL_NAMES', () => {
 
 describe('selection auto-clear helpers', () => {
   it('parses idle ms and max calls with 0 meaning disabled', () => {
-    expect(parseToolSelectionIdleMs(undefined)).toBe(30_000);
+    // Runtime default is 120s (v2 §4.1), aligned with the /invoke ceiling;
+    // the MCP config installer still writes an explicit 0.
+    expect(parseToolSelectionIdleMs(undefined)).toBe(120_000);
     expect(parseToolSelectionIdleMs('0')).toBe(0);
     expect(parseToolSelectionIdleMs('1500')).toBe(1500);
-    expect(parseToolSelectionIdleMs('nope')).toBe(30_000);
+    expect(parseToolSelectionIdleMs('nope')).toBe(120_000);
     expect(parseToolSelectionMaxCalls(undefined)).toBe(0);
     expect(parseToolSelectionMaxCalls('5')).toBe(5);
     expect(parseToolSelectionMaxCalls('-1')).toBe(0);

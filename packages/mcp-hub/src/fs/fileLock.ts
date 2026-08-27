@@ -5,6 +5,13 @@ import fs from 'node:fs/promises';
 const DEFAULT_STALE_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_RETRY_MS = 20;
+/**
+ * Creation ('wx' open) and the content write are two syscalls, so a lock file
+ * is briefly empty. Unparseable content younger than this is "still being
+ * written", not "left over from a crash" — stealing inside that window hands
+ * the lock to two holders at once. Past the grace it is stale as usual.
+ */
+const MALFORMED_GRACE_MS = 250;
 
 export type FileLockOptions = {
   /** Age past which a lock is presumed abandoned. Default 30 s. */
@@ -78,14 +85,30 @@ async function acquireLock(
 /**
  * Renaming the lock away is the atomic part: whichever caller wins the rename
  * removes it, and everyone else sees ENOENT and loops back to a plain create.
+ *
+ * A lock is reclaimable when its `acquiredAt` is past the staleness threshold,
+ * its contents are malformed — or, per protocol v1 §8.6, its recorded `pid` is
+ * a dead process even though `acquiredAt` is fresh. A holder that crashes
+ * right after acquiring would otherwise wedge every waiter for the full
+ * staleness window on each acquisition.
  */
 async function stealIfStale(
   lockPath: string,
   staleMs: number
 ): Promise<boolean> {
-  const acquiredAt = await readLockAcquiredAt(lockPath);
-  if (acquiredAt !== undefined && Date.now() - acquiredAt <= staleMs) {
-    return false;
+  const info = await readLockInfo(lockPath);
+  if (info === undefined) {
+    // Unreadable/unparseable: either a crash artefact (steal) or a lock whose
+    // creator has not finished writing the content yet (do not steal).
+    if (await isYoungerThan(lockPath, MALFORMED_GRACE_MS)) {
+      return false;
+    }
+  } else {
+    const fresh =
+      info.acquiredAt !== undefined && Date.now() - info.acquiredAt <= staleMs;
+    if (fresh && isLockHolderAlive(info.pid)) {
+      return false;
+    }
   }
 
   const graveyard = `${lockPath}.${process.pid}.${crypto
@@ -100,10 +123,41 @@ async function stealIfStale(
   return true;
 }
 
+/**
+ * Signal-0 liveness probe. `ESRCH` means dead; `EPERM` means the pid exists
+ * but is owned by someone else, which is alive for our purposes. A missing or
+ * non-positive pid is treated as dead rather than probed: `kill(0)` /
+ * `kill(-n)` would signal a whole process group, never a single holder.
+ */
+function isLockHolderAlive(pid: number | undefined): boolean {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** False when the file is already gone — the caller loops back to a create. */
+async function isYoungerThan(target: string, ageMs: number): Promise<boolean> {
+  try {
+    const stat = await fs.stat(target);
+    return Date.now() - stat.mtimeMs < ageMs;
+  } catch {
+    return false;
+  }
+}
+
+type LockInfo = {
+  acquiredAt?: number;
+  pid?: number;
+};
+
 /** `undefined` for a missing, unreadable or malformed lock, all of which are stale. */
-async function readLockAcquiredAt(
-  lockPath: string
-): Promise<number | undefined> {
+async function readLockInfo(lockPath: string): Promise<LockInfo | undefined> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await fs.readFile(lockPath, 'utf8'));
@@ -113,10 +167,14 @@ async function readLockAcquiredAt(
   if (typeof parsed !== 'object' || parsed === null) {
     return undefined;
   }
-  const acquiredAt = (parsed as { acquiredAt?: unknown }).acquiredAt;
-  return typeof acquiredAt === 'number' && Number.isFinite(acquiredAt)
-    ? acquiredAt
-    : undefined;
+  const { acquiredAt, pid } = parsed as { acquiredAt?: unknown; pid?: unknown };
+  return {
+    acquiredAt:
+      typeof acquiredAt === 'number' && Number.isFinite(acquiredAt)
+        ? acquiredAt
+        : undefined,
+    pid: typeof pid === 'number' && Number.isFinite(pid) ? pid : undefined
+  };
 }
 
 function delay(ms: number): Promise<void> {

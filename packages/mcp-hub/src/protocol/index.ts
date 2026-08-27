@@ -77,8 +77,19 @@ export const DEFAULT_AUDIT_MAX_FIELD_BYTES = 4096;
 
 export const DEFAULT_TOOL_DISCOVERY_THRESHOLD = 20;
 
-/** Default selection idle TTL: 30s approximates an agent-turn gap. */
-export const DEFAULT_TOOL_SELECTION_IDLE_MS = 30_000;
+/**
+ * Default selection idle TTL (v2 §4.1): aligned with the 120s `/invoke`
+ * confirmation ceiling so a blocked confirmation dialog cannot outlive the
+ * selection that exposed the tool. The MCP config installer overrides this
+ * with an explicit `0` (v1 §9.1).
+ */
+export const DEFAULT_TOOL_SELECTION_IDLE_MS = 120_000;
+
+/**
+ * `at_search_tools` hit descriptions are truncated to this many UTF-16 code
+ * units (`String.prototype.slice`; v2 §3.2). Full text stays in `at_get_tool`.
+ */
+export const SEARCH_DESCRIPTION_MAX_CHARS = 120;
 
 /** Default call budget disabled (idle TTL is the primary auto-clear path). */
 export const DEFAULT_TOOL_SELECTION_MAX_CALLS = 0;

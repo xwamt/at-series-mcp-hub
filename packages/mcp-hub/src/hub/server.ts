@@ -3,7 +3,6 @@ import os from 'node:os';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AuditLogger } from '../audit/logger';
 import type { AuditRecord, AuditStatus } from '../audit/types';
-import { sanitizeForAudit, sanitizePreview } from '../audit/sanitize';
 import {
   BridgeHttpError,
   bridgeGetHealth,
@@ -56,7 +55,7 @@ import {
 } from './discovery';
 
 const META_TOOL_DESCRIPTION =
-  'Use search → select → list_changed → first-class call to discover tools. Selection filters tools/list only; it is not an ACL. Selection auto-clears after idle TTL or call budget (see protocol v2).';
+  'Selection filters tools/list only; it is not an ACL.';
 
 const HUB_META_TOOLS: ToolCatalogEntry[] = [
   {
@@ -115,11 +114,35 @@ const HUB_META_TOOLS: ToolCatalogEntry[] = [
   }
 ];
 
-/** Periodic re-health interval (protocol §8.4: unhealthy 3–5s, healthy ≤15s). */
-const HEALTH_REFRESH_INTERVAL_MS = 5000;
+/** `tools/list` reuses memory when a refresh completed within this window (v1 §8.4, D12). */
+const LIST_REFRESH_TTL_MS = 2000;
+/** On-demand passes skip bridges whose last probe failure is newer than this (v1 §8.4). */
+const UNHEALTHY_BACKOFF_MS = 4000;
+/** Timer passes skip re-probing a healthy bridge probed successfully within this window (v1 §8.4). */
+const HEALTHY_REPROBE_MS = 15_000;
+/** Registry records whose `updatedAt` is older than this are stale (v1 §5): no HTTP. */
+const STALE_RECORD_MS = 90_000;
+/** Selected names missing from the winner set are retained this long (v2 §4). */
+const SELECTION_WINNER_GRACE_MS = 15_000;
+/** Periodic tick (v1 §8.4: failed bridges every tick; healthy gated by HEALTHY_REPROBE_MS). */
+const SCHEDULED_TICK_MS = 5000;
+
+/** What triggered a catalog refresh; decides which bridges get an HTTP probe. */
+export type HubRefreshReason = 'startup' | 'timer' | 'watch' | 'demand';
+
+/**
+ * Coalesced callers share one trailing pass; the strongest queued reason wins
+ * so a watch-driven full probe is never downgraded by a concurrent timer tick.
+ */
+const REFRESH_REASON_RANK: Record<HubRefreshReason, number> = {
+  timer: 0,
+  demand: 1,
+  startup: 2,
+  watch: 2
+};
 
 export type HubRuntime = {
-  refreshCatalog: () => Promise<
+  refreshCatalog: (options?: { reason?: HubRefreshReason }) => Promise<
     AggregatedCatalog & { providers: ListProvidersResult }
   >;
   listToolsForMcp: () => Promise<ToolCatalogEntry[]>;
@@ -191,7 +214,9 @@ function auditErrorFromResult(
       typeof err.code === 'string' &&
       typeof err.message === 'string'
     ) {
-      return { code: err.code, message: sanitizePreview(err.message) };
+      // Raw message on purpose: redaction runs on the async audit write path
+      // (AuditLogger), never on the MCP response path (v1 §3.4).
+      return { code: err.code, message: err.message };
     }
   } catch {
     // Fall through to a generic error.
@@ -218,6 +243,34 @@ function auditStatusFromResult(result: CallToolResult): AuditStatus {
   }
 }
 
+/**
+ * v1 §8.3.6: NOT_FOUND — or a VALIDATION_ERROR shaped like "this window does
+ * not own that tool/target" — from one bridge SHOULD be retried on the next
+ * same-pluginId bridge. Every other structured error (USER_CANCELLED, real
+ * argument validation, ...) is final and returns immediately.
+ */
+function shouldFailoverOnBridgeError(error: {
+  code: string;
+  message: string;
+}): boolean {
+  if (error.code === 'NOT_FOUND') {
+    return true;
+  }
+  if (error.code !== 'VALIDATION_ERROR') {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('unknown tool') ||
+    message.includes('unknown target') ||
+    message.includes('target unknown') ||
+    message.includes('target-unknown') ||
+    message.includes('no such tool') ||
+    message.includes('no such target') ||
+    message.includes('not found')
+  );
+}
+
 export async function createHubRuntime(options: {
   home?: string;
   hostApp: string;
@@ -228,6 +281,8 @@ export async function createHubRuntime(options: {
   selectionIdleMs?: number;
   /** Override AT_SERIES_TOOL_SELECTION_MAX_CALLS (tests). `0` disables. */
   selectionMaxCalls?: number;
+  /** Override the 15s selection winner grace window (tests). */
+  selectionWinnerGraceMs?: number;
   /** Invoked when the aggregated tool-name set changes (after baseline). */
   onToolsListChanged?: () => void;
 }): Promise<HubRuntime> {
@@ -249,6 +304,8 @@ export async function createHubRuntime(options: {
     options.selectionMaxCalls ??
       process.env[AT_SERIES_TOOL_SELECTION_MAX_CALLS_ENV]
   );
+  const selectionWinnerGraceMs =
+    options.selectionWinnerGraceMs ?? SELECTION_WINNER_GRACE_MS;
   const auditLogger = AuditLogger.fromEnv({
     home: options.home ?? os.homedir(),
     hostApp: options.hostApp
@@ -270,17 +327,26 @@ export async function createHubRuntime(options: {
   /** `undefined` until the first successful refresh establishes a baseline. */
   let toolsFingerprint: string | undefined;
   let selectedToolNames = new Set<string>();
+  /** Selected name → when it first went missing from the winner set (v2 §4 grace). */
+  const selectedMissingSince = new Map<string, number>();
   let lastSelectionActivityAt: number | undefined;
   let businessCallsSinceSelect = 0;
   let closed = false;
   let registryWatch: WatchBridgeRegistryHandle | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
 
+  /** Unix ms of the last completed refresh pass; `0` until the baseline lands. */
+  let lastSuccessRefreshAt = 0;
+  /** bridgeId → last successful /health probe (drives HEALTHY_REPROBE_MS skips). */
+  const lastSuccessAt = new Map<string, number>();
+  /** bridgeId → last probe/invoke transport failure (drives UNHEALTHY_BACKOFF_MS skips). */
+  const lastFailureAt = new Map<string, number>();
+
   /** Shared in-flight refresh; coalesces concurrent callers onto one trailing pass. */
   let refreshShared:
     | Promise<AggregatedCatalog & { providers: ListProvidersResult }>
     | undefined;
-  let refreshQueued = false;
+  let queuedReason: HubRefreshReason | undefined;
 
   function catalogToolRefs(): CatalogToolRef[] {
     return catalog.tools.flatMap((entry) => {
@@ -328,6 +394,7 @@ export async function createHubRuntime(options: {
       return;
     }
     selectedToolNames.clear();
+    selectedMissingSince.clear();
     businessCallsSinceSelect = 0;
     lastSelectionActivityAt = undefined;
     notifyExposedToolsChanged();
@@ -349,13 +416,89 @@ export async function createHubRuntime(options: {
     return reason;
   }
 
-  async function refreshCatalogOnce(): Promise<
+  /**
+   * v2 §4 grace: a selected name that lost its winner is retained for
+   * `selectionWinnerGraceMs` of continuous absence. tools/list only ever
+   * exposes `selected ∩ current winners`, so retention never leaks a dead
+   * tool; when the winner returns inside the window it is exposed again
+   * without a new at_select_tools.
+   */
+  function reconcileSelection(now: number): void {
+    const winnerNames = new Set(catalog.winners.keys());
+    for (const name of [...selectedToolNames]) {
+      if (winnerNames.has(name)) {
+        selectedMissingSince.delete(name);
+        continue;
+      }
+      const since = selectedMissingSince.get(name) ?? now;
+      if (now - since >= selectionWinnerGraceMs) {
+        selectedToolNames.delete(name);
+        selectedMissingSince.delete(name);
+      } else {
+        selectedMissingSince.set(name, since);
+      }
+    }
+    for (const name of [...selectedMissingSince.keys()]) {
+      if (!selectedToolNames.has(name)) {
+        selectedMissingSince.delete(name);
+      }
+    }
+    if (selectedToolNames.size === 0) {
+      businessCallsSinceSelect = 0;
+      lastSelectionActivityAt = undefined;
+    }
+  }
+
+  /** Re-derive catalog / providers / selection / fingerprint from bridge state. */
+  function rebuildDerivedState(now: number): void {
+    catalog = aggregateTools(healthyBridges);
+    providersResult = buildListProvidersResult({
+      hostApp,
+      hubVersion: options.hubVersion,
+      healthy: healthyBridges,
+      unhealthy: unhealthyBridges,
+      conflicts: catalog.conflicts
+    });
+    reconcileSelection(now);
+    notifyExposedToolsChanged();
+  }
+
+  /**
+   * v1 §8.3.5: an invoke transport failure demotes the bridge in memory
+   * immediately — the next tools/list and at_list_providers see it unhealthy
+   * without waiting for the periodic re-probe.
+   */
+  function demoteBridgeAfterTransportFailure(failed: HealthyBridge): void {
+    const now = Date.now();
+    lastFailureAt.set(failed.record.bridgeId, now);
+    const index = healthyBridges.findIndex(
+      (b) => b.record.bridgeId === failed.record.bridgeId
+    );
+    if (index === -1) {
+      return; // A concurrent refresh already rebuilt the pool.
+    }
+    healthyBridges = [
+      ...healthyBridges.slice(0, index),
+      ...healthyBridges.slice(index + 1)
+    ];
+    unhealthyBridges = [
+      ...unhealthyBridges,
+      { record: failed.record, status: 'unhealthy' }
+    ];
+    rebuildDerivedState(now);
+  }
+
+  async function refreshCatalogOnce(reason: HubRefreshReason): Promise<
     AggregatedCatalog & { providers: ListProvidersResult }
   > {
     const records = await listBridgeRecords({
       hostApp: options.hostApp,
       home: options.home
     });
+    const passStartedAt = Date.now();
+    const cachedHealthy = new Map(
+      healthyBridges.map((bridge) => [bridge.record.bridgeId, bridge])
+    );
 
     type ProbeResult =
       | { kind: 'healthy'; entry: HealthyBridge }
@@ -365,29 +508,76 @@ export async function createHubRuntime(options: {
     // `unhealthy`, so no element can reject.
     const probes = await Promise.all(
       records.map(async (record): Promise<ProbeResult> => {
-        try {
-          const health = await bridgeGetHealth(record);
-          let tools = record.tools;
-          try {
-            const toolsResponse = await bridgeGetTools(record);
-            tools = toolsResponse.tools;
-          } catch {
-            // Fall back to registry snapshot when live catalog fetch fails.
-          }
-          // Hub builtins are reserved: they never become Bridge routing winners.
-          tools = tools.filter(({ name }) => !META_TOOL_NAMES.has(name));
+        const bridgeId = record.bridgeId;
 
-          return {
-            kind: 'healthy',
-            entry: {
-              record,
-              tools,
-              connectedTargets: connectedTargetsForBridge(health, record)
-            }
-          };
-        } catch {
+        // v1 §5: three missed heartbeats — no HTTP, listed unhealthy, no tools.
+        if (passStartedAt - record.updatedAt > STALE_RECORD_MS) {
           return { kind: 'unhealthy', entry: { record, status: 'unhealthy' } };
         }
+
+        const lastFailure = lastFailureAt.get(bridgeId);
+        const lastSuccess = lastSuccessAt.get(bridgeId);
+
+        // Negative cache (v1 §8.4): an on-demand pass must not re-pay a probe
+        // timeout for a bridge that just failed; the timer still re-probes it.
+        if (
+          reason === 'demand' &&
+          lastFailure !== undefined &&
+          passStartedAt - lastFailure < UNHEALTHY_BACKOFF_MS
+        ) {
+          const cached = cachedHealthy.get(bridgeId);
+          return cached
+            ? { kind: 'healthy', entry: { ...cached, record } }
+            : { kind: 'unhealthy', entry: { record, status: 'unhealthy' } };
+        }
+
+        // Timer passes skip healthy bridges probed successfully within 15s
+        // (v1 §8.4) — the 5s tick then only costs HTTP for failed bridges.
+        if (
+          reason === 'timer' &&
+          lastSuccess !== undefined &&
+          passStartedAt - lastSuccess < HEALTHY_REPROBE_MS &&
+          (lastFailure === undefined || lastFailure <= lastSuccess)
+        ) {
+          const cached = cachedHealthy.get(bridgeId);
+          if (cached) {
+            return { kind: 'healthy', entry: { ...cached, record } };
+          }
+          // No memory snapshot to reuse — fall through to a real probe.
+        }
+
+        // v1 §8.2: health and tools go out concurrently for one bridge; the
+        // tools bytes are adopted only when health succeeded.
+        const [healthOutcome, toolsOutcome] = await Promise.allSettled([
+          bridgeGetHealth(record),
+          bridgeGetTools(record)
+        ]);
+
+        if (healthOutcome.status === 'rejected') {
+          lastFailureAt.set(bridgeId, Date.now());
+          return { kind: 'unhealthy', entry: { record, status: 'unhealthy' } };
+        }
+        lastSuccessAt.set(bridgeId, Date.now());
+        lastFailureAt.delete(bridgeId);
+
+        let tools =
+          toolsOutcome.status === 'fulfilled'
+            ? toolsOutcome.value.tools
+            : record.tools;
+        // Hub builtins are reserved: they never become Bridge routing winners.
+        tools = tools.filter(({ name }) => !META_TOOL_NAMES.has(name));
+
+        return {
+          kind: 'healthy',
+          entry: {
+            record,
+            tools,
+            connectedTargets: connectedTargetsForBridge(
+              healthOutcome.value,
+              record
+            )
+          }
+        };
       })
     );
 
@@ -406,40 +596,50 @@ export async function createHubRuntime(options: {
 
     healthyBridges = nextHealthy;
     unhealthyBridges = nextUnhealthy;
-    catalog = aggregateTools(healthyBridges);
-    providersResult = buildListProvidersResult({
-      hostApp,
-      hubVersion: options.hubVersion,
-      healthy: healthyBridges,
-      unhealthy: unhealthyBridges,
-      conflicts: catalog.conflicts
-    });
-    const winnerNames = new Set(catalog.winners.keys());
-    selectedToolNames = new Set(
-      [...selectedToolNames].filter((name) => winnerNames.has(name))
-    );
-    if (selectedToolNames.size === 0) {
-      businessCallsSinceSelect = 0;
-      lastSelectionActivityAt = undefined;
+
+    // Probe history for unregistered bridges is dead weight; drop it.
+    const liveIds = new Set(records.map((record) => record.bridgeId));
+    for (const id of [...lastSuccessAt.keys()]) {
+      if (!liveIds.has(id)) {
+        lastSuccessAt.delete(id);
+      }
     }
+    for (const id of [...lastFailureAt.keys()]) {
+      if (!liveIds.has(id)) {
+        lastFailureAt.delete(id);
+      }
+    }
+
+    rebuildDerivedState(Date.now());
     maybeAutoClearSelection();
-    notifyExposedToolsChanged();
+
+    // Any completed pass refreshes the tools/list TTL: skip/reuse decisions
+    // above still reflected the registry read, and watch deletions arrive as
+    // full-probe 'watch' passes anyway.
+    lastSuccessRefreshAt = Date.now();
 
     return { ...catalog, providers: providersResult };
   }
 
-  async function refreshCatalog(): Promise<
-    AggregatedCatalog & { providers: ListProvidersResult }
-  > {
-    refreshQueued = true;
+  async function refreshCatalog(refreshOptions?: {
+    reason?: HubRefreshReason;
+  }): Promise<AggregatedCatalog & { providers: ListProvidersResult }> {
+    const reason = refreshOptions?.reason ?? 'demand';
+    if (
+      queuedReason === undefined ||
+      REFRESH_REASON_RANK[reason] > REFRESH_REASON_RANK[queuedReason]
+    ) {
+      queuedReason = reason;
+    }
     if (!refreshShared) {
       refreshShared = (async () => {
         let result!: AggregatedCatalog & { providers: ListProvidersResult };
         try {
-          while (refreshQueued) {
-            refreshQueued = false;
+          while (queuedReason !== undefined) {
+            const passReason = queuedReason;
+            queuedReason = undefined;
             try {
-              result = await refreshCatalogOnce();
+              result = await refreshCatalogOnce(passReason);
             } catch (err) {
               // A broken registry read must not kill the Hub process. Keep the
               // previous catalog so already-discovered tools stay routable.
@@ -456,8 +656,30 @@ export async function createHubRuntime(options: {
     return refreshShared;
   }
 
+  /**
+   * Cold start only (v1 §8.1): the silent background baseline may still be in
+   * flight; awaiting it keeps the very first list/call correct. After the
+   * first completed pass this is a no-op.
+   */
+  async function awaitBaseline(): Promise<void> {
+    if (lastSuccessRefreshAt !== 0) {
+      return;
+    }
+    await (refreshShared ?? refreshCatalog({ reason: 'demand' }));
+  }
+
   async function listToolsForMcp(): Promise<ToolCatalogEntry[]> {
-    await refreshCatalog();
+    maybeAutoClearSelection();
+    if (refreshShared) {
+      // v1 §8.4: pending FS events / an in-flight pass must be visible to
+      // this list, so a just-deleted registry file cannot resurrect tools.
+      await refreshShared;
+    } else if (
+      lastSuccessRefreshAt === 0 ||
+      Date.now() - lastSuccessRefreshAt > LIST_REFRESH_TTL_MS
+    ) {
+      await refreshCatalog({ reason: 'demand' });
+    }
     maybeAutoClearSelection();
     return [...exposedBusinessTools(), ...HUB_META_TOOLS];
   }
@@ -466,8 +688,8 @@ export async function createHubRuntime(options: {
     name: string,
     args: Record<string, unknown>
   ): Promise<CallToolResult> {
-    await refreshCatalog();
     maybeAutoClearSelection();
+    await awaitBaseline();
 
     if (name === 'at_list_providers') {
       touchSelectionActivity();
@@ -475,7 +697,9 @@ export async function createHubRuntime(options: {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(providersResult, null, 2)
+            // Compact JSON (v2 §3.1): pretty-printing only inflated the
+            // context every provider listing pays for.
+            text: JSON.stringify(providersResult)
           }
         ]
       };
@@ -585,6 +809,11 @@ export async function createHubRuntime(options: {
         allToolNames: new Set(refs.map(({ entry }) => entry.name))
       });
       selectedToolNames = new Set(result.selected);
+      for (const missing of [...selectedMissingSince.keys()]) {
+        if (!selectedToolNames.has(missing)) {
+          selectedMissingSince.delete(missing);
+        }
+      }
       businessCallsSinceSelect = 0;
       touchSelectionActivity();
       const exposedBusinessToolCount = exposedBusinessTools().length;
@@ -615,7 +844,12 @@ export async function createHubRuntime(options: {
     let result: CallToolResult | undefined;
 
     try {
-      const winner = catalog.winners.get(name);
+      // v1 §8.3.1: route from memory; one on-demand refresh only on a miss.
+      let winner = catalog.winners.get(name);
+      if (!winner) {
+        await refreshCatalog({ reason: 'demand' });
+        winner = catalog.winners.get(name);
+      }
       if (!winner) {
         result = errorText('NOT_FOUND', `Unknown tool: ${name}`);
         return result;
@@ -629,7 +863,6 @@ export async function createHubRuntime(options: {
 
       const ordered = orderBridgesForTool(name, winner.bridges);
       if (ordered.length === 0) {
-        maybeAutoClearSelection();
         result = errorText('NOT_FOUND', `No healthy bridge for tool: ${name}`);
         return result;
       }
@@ -648,7 +881,12 @@ export async function createHubRuntime(options: {
           });
 
           if ('error' in response) {
-            maybeAutoClearSelection();
+            if (
+              attempt < maxAttempts - 1 &&
+              shouldFailoverOnBridgeError(response.error)
+            ) {
+              continue;
+            }
             result = {
               content: [{ type: 'text', text: JSON.stringify(response) }],
               isError: true
@@ -656,7 +894,6 @@ export async function createHubRuntime(options: {
             return result;
           }
 
-          maybeAutoClearSelection();
           result = {
             content: [
               {
@@ -668,10 +905,9 @@ export async function createHubRuntime(options: {
           return result;
         } catch (err) {
           lastTransportError = err;
+          demoteBridgeAfterTransportFailure(bridge);
         }
       }
-
-      maybeAutoClearSelection();
 
       if (lastTransportError instanceof BridgeHttpError) {
         result = errorText(lastTransportError.code, lastTransportError.message);
@@ -685,6 +921,11 @@ export async function createHubRuntime(options: {
       result = errorText('UNAVAILABLE', message);
       return result;
     } finally {
+      // Completion counts as selection activity even after a long
+      // confirmation dialog (v2 §4.1); evaluate auto-clear only after it.
+      touchSelectionActivity();
+      maybeAutoClearSelection();
+
       const finished =
         result ?? errorText('INTERNAL_ERROR', 'Tool call failed');
       const error = auditErrorFromResult(finished);
@@ -701,16 +942,13 @@ export async function createHubRuntime(options: {
         durationMs: Math.max(0, Date.now() - started),
         status: auditStatusFromResult(finished),
         error,
-        params: sanitizeForAudit(args, auditLogger.maxFieldBytes) as Record<
-          string,
-          unknown
-        >,
+        // Raw values on purpose: redaction and truncation run on the async
+        // audit write path inside AuditLogger, never on the MCP response
+        // path (v1 §3.4).
+        params: args,
         responseSummary: {
           isError: finished.isError === true,
-          preview: sanitizePreview(
-            finished.content[0]?.text ?? '',
-            auditLogger.maxFieldBytes
-          )
+          preview: finished.content[0]?.text ?? ''
         }
       };
       try {
@@ -732,9 +970,6 @@ export async function createHubRuntime(options: {
     await auditLogger.close();
   }
 
-  // Establish fingerprint baseline before watch/timers so startup is quiet.
-  await refreshCatalog();
-
   try {
     registryWatch = watchBridgeRegistry({
       hostApp: options.hostApp,
@@ -743,7 +978,7 @@ export async function createHubRuntime(options: {
         if (closed) {
           return;
         }
-        void refreshCatalog().catch((err) => {
+        void refreshCatalog({ reason: 'watch' }).catch((err) => {
           hubLog.error(`registry watch refresh failed: ${describeError(err)}`);
         });
       }
@@ -759,12 +994,18 @@ export async function createHubRuntime(options: {
     if (closed) {
       return;
     }
-    void refreshCatalog().catch((err) => {
+    void refreshCatalog({ reason: 'timer' }).catch((err) => {
       hubLog.error(`scheduled refresh failed: ${describeError(err)}`);
     });
-  }, HEALTH_REFRESH_INTERVAL_MS);
+  }, SCHEDULED_TICK_MS);
   // Allow process exit while the timer is the only live handle (tests / short runs).
   healthTimer.unref?.();
+
+  // Silent background baseline (v1 §8.1): MCP initialize must never wait on
+  // Bridge HTTP. The first list/call awaits this in-flight pass instead.
+  void refreshCatalog({ reason: 'startup' }).catch((err) => {
+    hubLog.error(`startup refresh failed: ${describeError(err)}`);
+  });
 
   return {
     refreshCatalog,

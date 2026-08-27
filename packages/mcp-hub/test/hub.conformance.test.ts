@@ -177,6 +177,9 @@ describe('protocol v1 §15 conformance', () => {
     });
 
     try {
+      // Recent heartbeats (records older than 90s are stale per v1 §5 and
+      // would be skipped without an HTTP probe); term-b is newer and wins.
+      const now = Date.now();
       await new FsBridgePublisher({
         home,
         bridgeId: 'term-a',
@@ -187,7 +190,7 @@ describe('protocol v1 §15 conformance', () => {
           port: a.port,
           token: a.token,
           tools: [tool('list_ssh_servers')],
-          updatedAt: 10,
+          updatedAt: now - 20_000,
           capabilities: { connectedTargets: 1 }
         })
       );
@@ -201,7 +204,7 @@ describe('protocol v1 §15 conformance', () => {
           port: b.port,
           token: b.token,
           tools: [tool('list_ssh_servers')],
-          updatedAt: 20,
+          updatedAt: now - 10_000,
           capabilities: { connectedTargets: 2 }
         })
       );
@@ -237,7 +240,9 @@ describe('protocol v1 §15 conformance', () => {
     });
 
     try {
-      // Fake /health returns connectedTargets=1 for both; updatedAt picks the winner.
+      // Fake /health returns connectedTargets=1 for both; updatedAt picks the
+      // winner. Both heartbeats are recent so neither record is stale (v1 §5).
+      const now = Date.now();
       await new FsBridgePublisher({
         home,
         bridgeId: 'high-bridge',
@@ -250,7 +255,7 @@ describe('protocol v1 §15 conformance', () => {
           port: high.port,
           token: high.token,
           tools: [tool('shared_tool', { title: 'from-high' })],
-          updatedAt: 200
+          updatedAt: now - 10_000
         })
       );
       await new FsBridgePublisher({
@@ -265,7 +270,7 @@ describe('protocol v1 §15 conformance', () => {
           port: low.port,
           token: low.token,
           tools: [tool('shared_tool', { title: 'from-low' })],
-          updatedAt: 50
+          updatedAt: now - 20_000
         })
       );
 

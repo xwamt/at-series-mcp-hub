@@ -7,6 +7,37 @@ const FILE_MODE = 0o600;
 const DIR_MODE = 0o700;
 
 /**
+ * Windows antivirus / indexers briefly hold freshly written files open, which
+ * surfaces as EPERM/EBUSY (occasionally EACCES) on the rename. Those clear in
+ * milliseconds, so two short retries turn a spurious publish failure into a
+ * non-event. Anything else (EISDIR, EXDEV, ENOENT…) is a real error and is
+ * rethrown immediately.
+ */
+const RENAME_RETRY_DELAYS_MS = [10, 30];
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (
+        attempt >= RENAME_RETRY_DELAYS_MS.length ||
+        code === undefined ||
+        !RETRYABLE_RENAME_CODES.has(code)
+      ) {
+        throw err;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, RENAME_RETRY_DELAYS_MS[attempt])
+      );
+    }
+  }
+}
+
+/**
  * `'preserve'` keeps whatever the target already has and falls back to the
  * process umask when it does not exist yet. Use it for files we do not own —
  * `~/.cursor/mcp.json` is the user's, and re-permissioning it on their behalf
@@ -56,7 +87,7 @@ export async function atomicWriteFile(
     if (mode !== undefined) {
       await tryChmod(tmpPath, mode);
     }
-    await fs.rename(tmpPath, target);
+    await renameWithRetry(tmpPath, target);
     if (mode !== undefined) {
       await tryChmod(target, mode);
     }

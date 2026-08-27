@@ -211,4 +211,54 @@ describe('parallel bridge probing', () => {
       await second.close();
     }
   }, 20_000);
+
+  it('sends /health and /tools for one bridge concurrently (v1 §8.2)', async () => {
+    // /health only answers once /tools has been reached. A hub that probes
+    // sequentially (health, then tools) deadlocks here: health times out at
+    // 2s, the bridge is marked unhealthy, and the tool never aggregates.
+    let toolsReached!: () => void;
+    const toolsReachedPromise = new Promise<void>((resolve) => {
+      toolsReached = resolve;
+    });
+
+    const bridge = await startFakeBridge({
+      bridgeId: 'pair-1',
+      pluginId: 'at.pair',
+      tools: [sharedTool('from at.pair')],
+      beforeHealth: () => toolsReachedPromise,
+      beforeTools: () => {
+        toolsReached();
+      }
+    });
+
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'at-series-pair-'));
+
+    try {
+      await new FsBridgePublisher({ home, bridgeId: 'pair-1', hostApp: 'cursor' }).publish(
+        baseRecord({
+          bridgeId: 'pair-1',
+          pluginId: 'at.pair',
+          port: bridge.port,
+          token: bridge.token,
+          tools: []
+        })
+      );
+
+      const runtime = await createHubRuntime({
+        hostApp: 'cursor',
+        hubVersion: '0.3.0',
+        home
+      });
+
+      // The live /tools catalog (not the empty registry snapshot) must win,
+      // proving the tools response was fetched — and fetched in parallel.
+      const tools = await runtime.listToolsForMcp();
+      expect(tools.map((t) => t.name)).toContain('shared_tool');
+
+      await runtime.close();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await bridge.close();
+    }
+  }, 20_000);
 });

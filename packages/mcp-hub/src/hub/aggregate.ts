@@ -34,16 +34,11 @@ function compareScoreDesc(a: HealthyBridge, b: HealthyBridge): number {
   return bUpdated - aUpdated;
 }
 
-function bestBridge(bridges: HealthyBridge[]): HealthyBridge {
-  return [...bridges].sort(compareScoreDesc)[0]!;
-}
-
 function entryForTool(
-  bridges: HealthyBridge[],
+  rankedBridges: HealthyBridge[],
   name: string
 ): ToolCatalogEntry | undefined {
-  const ranked = [...bridges].sort(compareScoreDesc);
-  for (const b of ranked) {
+  for (const b of rankedBridges) {
     const entry = b.tools.find((t) => t.name === name);
     if (entry) return entry;
   }
@@ -102,22 +97,35 @@ export function aggregateTools(
   >();
   const conflicts: AggregatedCatalog['conflicts'] = [];
 
+  // Each candidate's bridge list is sorted exactly once; the best bridge,
+  // the winner's ordered bridge list, and the winning entry all reuse it.
+  const rankedBridgesCache = new Map<HealthyBridge[], HealthyBridge[]>();
+  const rankedBridgesOf = (bridges: HealthyBridge[]): HealthyBridge[] => {
+    let ranked = rankedBridgesCache.get(bridges);
+    if (!ranked) {
+      ranked = [...bridges].sort(compareScoreDesc);
+      rankedBridgesCache.set(bridges, ranked);
+    }
+    return ranked;
+  };
+
   const names = [...byName.keys()].sort();
   for (const name of names) {
     const candidates = byName.get(name)!;
     // Rank pluginIds by their best bridge score
     const ranked = [...candidates].sort((a, b) =>
-      compareScoreDesc(bestBridge(a.bridges), bestBridge(b.bridges))
+      compareScoreDesc(rankedBridgesOf(a.bridges)[0]!, rankedBridgesOf(b.bridges)[0]!)
     );
     const winner = ranked[0]!;
     const losers = ranked.slice(1);
 
+    const winnerRanked = rankedBridgesOf(winner.bridges);
     winners.set(name, {
       pluginId: winner.pluginId,
-      bridges: [...winner.bridges].sort(compareScoreDesc)
+      bridges: winnerRanked
     });
 
-    const entry = entryForTool(winner.bridges, name);
+    const entry = entryForTool(winnerRanked, name);
     if (entry) tools.push(entry);
 
     if (losers.length > 0) {

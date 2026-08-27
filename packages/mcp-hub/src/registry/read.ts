@@ -135,33 +135,37 @@ export async function listBridgeRecords(
     throw err;
   }
 
-  const records: BridgeRegistryRecord[] = [];
+  const jsonNames = entries.filter(
+    (name) => path.extname(name).toLowerCase() === '.json'
+  );
 
-  for (const name of entries) {
-    if (path.extname(name).toLowerCase() !== '.json') {
-      continue;
-    }
+  // Read all candidate files concurrently: with N bridges the sequential
+  // version cost N round-trips to the filesystem on every catalog refresh.
+  // Promise.all preserves input order, so the result keeps the readdir
+  // relative order (minus skipped files) that Hub conflict adjudication
+  // depends on being stable.
+  const maybeRecords = await Promise.all(
+    jsonNames.map(async (name): Promise<BridgeRegistryRecord | null> => {
+      const filePath = path.join(dir, name);
+      let text: string;
+      try {
+        text = await fs.readFile(filePath, 'utf8');
+      } catch {
+        return null;
+      }
 
-    const filePath = path.join(dir, name);
-    let text: string;
-    try {
-      text = await fs.readFile(filePath, 'utf8');
-    } catch {
-      continue;
-    }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return null;
+      }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      continue;
-    }
+      return parseBridgeRegistryRecord(parsed, hostApp);
+    })
+  );
 
-    const record = parseBridgeRegistryRecord(parsed, hostApp);
-    if (record) {
-      records.push(record);
-    }
-  }
-
-  return records;
+  return maybeRecords.filter(
+    (record): record is BridgeRegistryRecord => record !== null
+  );
 }

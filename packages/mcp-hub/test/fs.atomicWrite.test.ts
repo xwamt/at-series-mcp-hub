@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -130,6 +130,73 @@ describe('atomicWriteFile', () => {
 
     await expect(atomicWriteFile(target, 'nope')).rejects.toThrow();
     expect(await fs.readdir(root)).toEqual(['blocked']);
+  });
+});
+
+describe('atomicWriteFile rename retry', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'at-series-rename-'));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  function errnoError(code: string): NodeJS.ErrnoException {
+    const err = new Error(`${code}: mocked rename failure`) as NodeJS.ErrnoException;
+    err.code = code;
+    return err;
+  }
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])(
+    'retries a transient %s on rename and still lands the write',
+    async (code) => {
+      const target = path.join(root, 'record.json');
+      const realRename = fs.rename;
+      let failures = 0;
+      const spy = vi
+        .spyOn(fs, 'rename')
+        .mockImplementation(async (from, to) => {
+          if (failures < 2) {
+            failures += 1;
+            throw errnoError(code);
+          }
+          return realRename(from, to);
+        });
+
+      await atomicWriteFile(target, 'after retry');
+
+      expect(await fs.readFile(target, 'utf8')).toBe('after retry');
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(await fs.readdir(root)).toEqual(['record.json']);
+    }
+  );
+
+  it('gives up after exhausting retries and cleans the temp file', async () => {
+    const target = path.join(root, 'record.json');
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValue(errnoError('EPERM'));
+
+    await expect(atomicWriteFile(target, 'never lands')).rejects.toMatchObject({
+      code: 'EPERM'
+    });
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it('does not retry a non-transient rename failure', async () => {
+    const target = path.join(root, 'record.json');
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValue(errnoError('EXDEV'));
+
+    await expect(atomicWriteFile(target, 'nope')).rejects.toMatchObject({
+      code: 'EXDEV'
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(root)).toEqual([]);
   });
 });
 
