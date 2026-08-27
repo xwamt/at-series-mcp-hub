@@ -175,6 +175,10 @@ at-series-mcp-hub/
    - 同版本不同 hash 可覆盖  
    - installer autoApprove 仅五个 Hub 元工具（忽略 `registryTools`）  
    - 旧 server 名迁移且不删第三方 MCP  
+   - `tools/call` 热路径不因无关僵死桥而同步等待 health 超时  
+   - 不健康桥在负缓存窗口内不被按需重探  
+   - invoke 传输失败立即从内存摘除该桥  
+   - installer 写入的 idle 仍为 `0`；未设 env 时 Hub runtime 默认 120s  
 6. **不要**为「方便」在 Hub 内特殊对待 `at.terminal` / `at.jumpserver` 业务字段。
 
 ---

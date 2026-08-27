@@ -82,7 +82,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | D9 | IDE 配置 | 唯一条目名 **`AT Series`**；主动迁移旧本系列条目 |
 | D10 | Hub 版本 | **高 semver 覆盖，禁止降级**；同 semver 仅当 `bundleSha256` 不同才覆盖；结合 protocolVersion |
 | D11 | 协议版本字段 | v1 起 registry/health/tools **显式 `protocolVersion`** |
-| D12 | 动态刷新 | 以 registry watch + health + **`tools/list_changed`** 为主；每次 list 全量重扫保底 |
+| D12 | 动态刷新 | 以 registry watch + 周期 health + **`tools/list_changed`** 为主。`tools/list` 从当前内存目录重算；允许把并发/近时网络重探合并到 **≤2s** 窗口。registry 删除必须在下一次 `tools/list` 或随后的 `list_changed` 中体现。全量网络重探是后台与 miss 保底，**不是**每次 list/call 的同步前置条件 |
 | D13 | LM Tools | **删除 `languageModelTools`**，只保留 MCP 工具面 |
 | D14 | AT Terminal 变体 | 继续 base / mcp 双变体；base 不贡献 MCP；mcp 贡献 Hub |
 | D15 | 单装 JumpServer | **允许** JumpServer 独立维护 AT Series Hub |
@@ -120,7 +120,7 @@ AT 系列插件（当前已知：`ssh-plugins` / AT Terminal，`jumpserver-plugi
 | H6 | 健康检查失败的 Bridge 不贡献工具 | P0 |
 | H7 | `tools/list` 动态反映当前在线工具 | P0 |
 | H8 | 工具上下线时发送 `tools/list_changed` | P0 |
-| H9 | `tools/list` 路径具备全量一致性重算保底 | P0 |
+| H9 | `tools/list` 从当前内存目录一致性重算；watch 与周期 health 驱动网络重探；允许 ≤2s 合并窗口 | P0 |
 | H10 | `tools/call` 路由到对应插件 Bridge 的 `/invoke` | P0 |
 | H11 | 同 `pluginId` 多 Bridge 折叠工具并智能选路 | P0 |
 | H12 | 跨 `pluginId` 工具名冲突可诊断，list 中只保留胜者 | P0 |

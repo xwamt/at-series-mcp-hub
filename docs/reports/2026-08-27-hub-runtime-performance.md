@@ -1,6 +1,6 @@
 # Hub 运行时性能与响应速度分析
 
-> **状态：** 分析完成，未改实现。  
+> **状态：** 契约已更新；实现进行中（2026-08-27）。  
 > **日期：** 2026-08-27  
 > **范围：** `@at-series/mcp-hub` 热路径（stdio MCP `tools/list` / `tools/call`、Bridge HTTP 探测、registry watch、渐进暴露端到端）。  
 > **方法：** 四个子代理并行深读源码与契约（模型 `claude-fable-5-thinking-xhigh`），本报告只保留交叉验证后的共识与已核对证据。  

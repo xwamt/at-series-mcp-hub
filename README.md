@@ -61,7 +61,7 @@ IDE MCP Client (Cursor / Kiro / Continue / …)
 |-----|------|------|
 | `AT_SERIES_TOOL_DISCOVERY` | `auto` | `auto` / `always` / `off` |
 | `AT_SERIES_TOOL_DISCOVERY_THRESHOLD` | `20` | `auto` 下超过该业务工具数才渐进 |
-| `AT_SERIES_TOOL_SELECTION_IDLE_MS` | `30000`（Hub 未设 env）；installer 写入 `0` | 选中空闲自动 clear；`0` 关闭 |
+| `AT_SERIES_TOOL_SELECTION_IDLE_MS` | `120000`（Hub 未设 env）；installer 写入 `0` | 选中空闲自动 clear；`0` 关闭 |
 | `AT_SERIES_TOOL_SELECTION_MAX_CALLS` | `0` | 业务调用次数预算；`0` 关闭 |
 
 **list ≠ ACL：** 未出现在 `tools/list` 的赢家工具，Hub 仍可路由 `tools/call`（部分 IDE 客户端会自行按 list 拦截）。

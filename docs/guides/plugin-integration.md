@@ -33,7 +33,7 @@ Hub v2 may progressively expose a large tool catalog. The agent flow is:
 
 Two defaults exist for idle TTL — do not mix them up:
 
-- **Hub runtime** (env unset): `30000` (30s)
+- **Hub runtime** (env unset): `120000` (120s; aligned with the `/invoke` confirmation ceiling)
 - **Installer-written config:** `0` (disabled; Cursor workaround). See protocol [v1.md §9.1](../protocol/v1.md) and [v2.md §4.1](../protocol/v2.md)
 
 Plugins do not implement this flow and MUST NOT pre-filter their catalogs: continue publishing the complete invocable catalog from `GET /tools` and in the registry `tools` snapshot with `protocolVersion: 1`. The Hub owns discovery mode and selection. See [Protocol v2](../protocol/v2.md).
@@ -347,7 +347,7 @@ Resulting Cursor/Kiro shape:
 }
 ```
 
-`IDLE_MS: "0"` here is the installer override, not the Hub runtime default of 30s.
+`IDLE_MS: "0"` here is the installer override, not the Hub runtime default of 120s.
 
 Migrate away:
 
