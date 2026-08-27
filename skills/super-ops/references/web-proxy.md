@@ -33,3 +33,14 @@ Back up the authoritative configuration, validate syntax, identify reload semant
 Verify syntax, effective route, external and direct upstream health, TLS chain/hostname, representative status/body, headers, logs, latency, and multiple backends where applicable.
 
 Official references: [Nginx command-line parameters](https://nginx.org/en/docs/switches.html), [Apache configuration files](https://httpd.apache.org/docs/current/configuring.html).
+
+## Related
+
+- [network-dns-tls.md](network-dns-tls.md) for handshake and certificate failures.
+- [linux-host.md](linux-host.md) when the proxy is up but the box is saturated.
+
+## Common mistakes
+
+- Defaulting to `nginx -T` (huge, often secret-bearing).
+- Raising timeouts to "fix" 504 without measuring upstream latency.
+- Reloading after `nginx -t` without approval.

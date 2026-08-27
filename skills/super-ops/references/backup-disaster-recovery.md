@@ -28,3 +28,14 @@ Restore, failover, overwrite, backup deletion and retention/key changes are high
 Verify checksums/catalog, decryptability, application consistency, dependency connectivity, data invariants, user access, monitoring, achieved RPO/RTO and backup schedule resumption. Record the tested recovery point and evidence.
 
 Official references: [NIST contingency planning guide](https://csrc.nist.gov/pubs/sp/800/34/r1/upd1/final), [Kubernetes backup and restore considerations](https://kubernetes.io/docs/concepts/cluster-administration/cluster-administration-overview/).
+
+## Related
+
+- [databases.md](databases.md) for engine-consistent backups.
+- [safe-operations.md](safe-operations.md) before restore, failover, or retention changes.
+
+## Common mistakes
+
+- Treating backup job success as proof of recoverability.
+- Deleting older recovery points to free space without approval.
+- Restoring onto live production without an isolated target.

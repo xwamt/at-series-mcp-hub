@@ -30,3 +30,14 @@ Editing units or drop-ins, `daemon-reload`, `enable`, `disable`, `restart`, `rel
 Verify `ActiveState`, `SubState`, main PID, restart count, listening socket, health check, recent journal, and critical request path. Watch long enough to cover the previous restart interval.
 
 Official references: [systemctl](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html), [systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html), [journalctl](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html).
+
+## Related
+
+- [linux-host.md](linux-host.md) for OOM, CPU, and memory pressure behind a restart loop.
+- [docker-compose.md](docker-compose.md) when the unit only wraps a container.
+
+## Common mistakes
+
+- `daemon-reload` / `reset-failed` before the unit file or root cause is understood.
+- Treating `ActiveState=active` as user-visible health.
+- Unbounded `journalctl -f` instead of `-n` / `--since`.

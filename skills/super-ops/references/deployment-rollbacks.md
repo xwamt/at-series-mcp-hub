@@ -28,3 +28,15 @@ Present target, exact artifact digest, change set, expected interruption, rollou
 Verify deployed digest/version on all intended targets, configuration, schema compatibility, readiness, critical transactions, logs, metrics, traces, error/latency versus baseline, and stability through the observation window. Document whether old artifacts and backups remain available.
 
 Official references: [Kubernetes deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/), [Google SRE canarying releases](https://sre.google/workbook/canarying-releases/).
+
+## Related
+
+- [safe-operations.md](safe-operations.md) is mandatory before any rollout.
+- [backup-disaster-recovery.md](backup-disaster-recovery.md) when the release includes data restore.
+- [databases.md](databases.md) when a migration may block application rollback.
+
+## Common mistakes
+
+- Treating rollback as an inherently safe undo.
+- Declaring success from a controller summary while instances are mixed.
+- Deploying because workspace and remote versions differ.

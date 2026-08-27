@@ -31,3 +31,14 @@ Starting, stopping, restarting, recreating, pulling, pruning, deleting volumes, 
 Verify container identity and digest, stable state beyond the former restart interval, health, logs, published socket, persistent data, dependency connectivity, and an end-user request path.
 
 Official references: [Docker troubleshooting](https://docs.docker.com/engine/daemon/troubleshoot/), [Compose production guidance](https://docs.docker.com/compose/how-tos/production/).
+
+## Related
+
+- [linux-host.md](linux-host.md) for cgroup/host pressure.
+- [kubernetes.md](kubernetes.md) when the runtime is a cluster, not Compose.
+
+## Common mistakes
+
+- Broad `docker system prune` as routine cleanup.
+- Assuming a mutable tag identifies the running digest.
+- Printing resolved Compose secrets.

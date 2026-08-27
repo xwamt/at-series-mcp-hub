@@ -31,3 +31,14 @@ Killing processes, clearing caches, changing limits, adding swap, tuning sysctl,
 Compare the same bounded signals before and after mitigation. Verify the application health check, error rate, latency, process stability, memory trend, and absence of new kernel warnings. State whether the cause was host pressure, an application leak, workload growth, or an external dependency.
 
 Official references: [Linux PSI](https://docs.kernel.org/accounting/psi.html), [proc filesystem](https://docs.kernel.org/filesystems/proc.html).
+
+## Related
+
+- [storage-filesystem.md](storage-filesystem.md) for I/O wait and disk/inode exhaustion.
+- [systemd-services.md](systemd-services.md) when a unit is restarting or missing.
+
+## Common mistakes
+
+- Treating high load average as high CPU without checking uninterruptible `D` state.
+- Restarting an OOM victim without the kernel OOM event and killer PID.
+- Clearing caches or adding swap as a first response.

@@ -11,6 +11,17 @@ Use for time-boxed MySQL / database QPS, Com_*, or query-rate spikes. Cap refere
 5. **Correlate batch / request IDs** — one batchId / trace / job id across metrics → logs → (optional) SQL sample. Stop when the chain breaks; do not invent links.
 6. **Conclude** — confirmed root cause only with application-side trigger evidence in the spike window. MQ/RPS/QPS co-rising alone = propagation, not origin. No app trigger → hypothesis only.
 
+## Related
+
+- [grafana.md](grafana.md) and/or [jumpserver.md](jumpserver.md) as the one provider appendix for this runbook.
+- [databases.md](databases.md) for non-spike database faults.
+
+## Common mistakes
+
+- Skipping logs because Com_* already moved with RPS.
+- Opening a Canvas before the trigger event is in evidence.
+- Clearing tool selection between Grafana and JumpServer.
+
 ## Do not
 
 - Treat panel fieldConfig / dashboard options as evidence.

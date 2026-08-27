@@ -18,7 +18,11 @@ All tools are `risk: read`. Only instances with **Allow Agent background access*
 | Discover usable instances | `grafana_list_instances` |
 | Dashboards / folders | `grafana_list_dashboards`, `grafana_list_folders`, `grafana_get_dashboard` |
 | Alert rules / history | `grafana_list_alert_rules`, `grafana_get_alert_rule`, `grafana_get_alert_history` |
-| Datasources / query | `grafana_list_datasources`, `grafana_query_datasource` |
+| Prometheus query | `grafana_query_prometheus` |
+| Loki query | `grafana_query_loki` |
+| Other datasource / unusual path | `grafana_query_datasource` (escape hatch only) |
+
+Prefer typed `grafana_query_prometheus` / `grafana_query_loki`. Do not use `grafana_query_datasource` for ordinary PromQL/LogQL.
 
 ## Payload discipline
 
@@ -33,12 +37,24 @@ All tools are `risk: read`. Only instances with **Allow Agent background access*
 
 1. Always start with `grafana_list_instances`. Empty → tell the user no instance has background access; do not invent `instanceId`.
 2. Management path: list → `get_dashboard` with `fields: "targets"` (or `summary` then `targets`). Use expressions + datasource uid only.
-3. Monitoring path: `grafana_list_datasources` → `grafana_query_datasource` with `method` (`GET`/`POST` only), datasource-native `path` (e.g. Prometheus `api/v1/query_range`, Loki `loki/api/v1/query_range`), and `query`/`body` from step 2.
+3. Monitoring path: `grafana_list_datasources` for `datasourceUid` → `grafana_query_prometheus` or `grafana_query_loki` with a tight window. Use `grafana_query_datasource` only for other datasources (`GET`/`POST`, path under the datasource proxy).
 4. If a query result has `truncated: true`, narrow the time range or query and retry — do not treat truncation as a hard failure, and do not inflate limits.
 5. Never surface Service Account tokens or credential-shaped values.
 
 ## Quick examples
 
-**Dashboard panel spike:** `list_instances` → `list_dashboards` → `get_dashboard` `{ fields: "targets", titleContains: "QPS" }` (≤1–2) → `query_datasource` with a tight window → then business logs (see SuperOps fast path / [db-qps-spike.md](db-qps-spike.md) when QPS-related).
+**Dashboard panel spike:** `list_instances` → `list_dashboards` → `get_dashboard` `{ fields: "targets", titleContains: "QPS" }` (≤1–2) → `grafana_query_prometheus` with a tight window → then `grafana_query_loki` for business logs (see SuperOps fast path / [db-qps-spike.md](db-qps-spike.md) when QPS-related).
 
 **Firing alerts:** `list_instances` → `list_alert_rules` (filter firing) → `get_alert_rule` / `get_alert_history`.
+
+## Related
+
+- [db-qps-spike.md](db-qps-spike.md) for time-boxed QPS.
+- [compose-knowledge.md](compose-knowledge.md) when writing PromQL/LogQL, not querying live data.
+- [observability.md](observability.md) for signal correlation rules.
+
+## Common mistakes
+
+- Calling `grafana_query_datasource` for ordinary PromQL/LogQL.
+- Fetching `fields: "full"` during metric triage.
+- Raising Loki `limit` when `truncated: true` instead of narrowing the query.

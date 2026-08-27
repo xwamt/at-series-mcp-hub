@@ -30,3 +30,14 @@ Isolation, account disablement, credential rotation, firewall changes, process t
 Verify containment across identities, hosts, workloads and persistence paths; monitor for recurrence; confirm credential consumers recovered; preserve the timeline and remaining uncertainty. Separate containment, eradication and recovery, and require the incident owner to decide closure.
 
 Official references: [NIST incident response recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final), [CISA incident response playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks).
+
+## Related
+
+- [incident-response.md](incident-response.md) for availability outages that are not (yet) compromise.
+- [safe-operations.md](safe-operations.md) before containment that changes state.
+
+## Common mistakes
+
+- Cleaning malware off a live host instead of preserving evidence and rebuilding.
+- Pasting hashes, dumps, or raw logs with secrets into chat.
+- Closing as false positive because no obvious malware binary was found.

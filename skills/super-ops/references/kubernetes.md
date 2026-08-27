@@ -34,3 +34,15 @@ Use `kubectl describe` for the affected object, `kubectl logs --since=30m --tail
 Verify observed generation, desired/current/available replicas, Pod readiness and restart stability, Service endpoints, probes, events, logs, critical request path, and monitoring. Observe long enough to cover probe and rollout windows.
 
 Official references: [Troubleshoot applications](https://kubernetes.io/docs/tasks/debug/debug-application/), [Troubleshoot clusters](https://kubernetes.io/docs/tasks/debug/debug-cluster/), [Services](https://kubernetes.io/docs/concepts/services-networking/service/).
+
+## Related
+
+- [docker-compose.md](docker-compose.md) for non-cluster container hosts.
+- [web-proxy.md](web-proxy.md) after Service/Ingress reach the proxy layer.
+- [compose-knowledge.md](compose-knowledge.md) only when **authoring** manifests, not diagnosing live Pods.
+
+## Common mistakes
+
+- `kubectl exec -it` or `logs -f` (unbounded / interactive).
+- Editing live objects that GitOps will overwrite.
+- Dumping `-o yaml` for a whole namespace.

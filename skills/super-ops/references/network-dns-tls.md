@@ -32,3 +32,13 @@ Firewall, route, interface, resolver, certificate, proxy, and security-group cha
 Repeat resolution, route, TCP, TLS, and application checks from the relevant network namespace and client perspective. Verify both direct upstream and end-user path, and confirm no unintended exposure was introduced.
 
 Official references: [ip-route](https://man7.org/linux/man-pages/man8/ip-route.8.html), [OpenSSL s_client](https://docs.openssl.org/master/man1/openssl-s_client/).
+
+## Related
+
+- [web-proxy.md](web-proxy.md) for HTTP gateway 4xx/5xx after TCP/TLS succeed.
+
+## Common mistakes
+
+- Assuming firewall first on every timeout.
+- Editing `/etc/hosts` as the default DNS fix.
+- Putting credentials in `curl` diagnostic URLs.

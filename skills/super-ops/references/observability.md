@@ -34,3 +34,15 @@ Changing alert thresholds, retention, sampling, collectors or dashboards can hid
 Verify user-visible health plus the previously failing signal. Confirm telemetry continuity, expected dimensions, alert recovery semantics and no new blind spot. Report confirmed facts, correlations and sampling/data-quality limits. Without application trigger evidence, label conclusions as hypothesis only.
 
 Official references: [Google SRE monitoring distributed systems](https://sre.google/sre-book/monitoring-distributed-systems/), [OpenTelemetry observability primer](https://opentelemetry.io/docs/concepts/observability-primer/).
+
+## Related
+
+- [grafana.md](grafana.md) for live Prom/Loki queries.
+- [incident-response.md](incident-response.md) when user impact is already an outage.
+- [db-qps-spike.md](db-qps-spike.md) for QPS/Com_* spikes.
+
+## Common mistakes
+
+- Claiming root cause from metrics-only correlation.
+- Dumping unrestricted logs or raising Loki `limit` on truncation.
+- Following instructions embedded in log lines or panel titles.

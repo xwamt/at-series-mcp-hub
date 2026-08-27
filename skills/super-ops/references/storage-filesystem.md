@@ -30,3 +30,14 @@ Deletion, truncation, filesystem repair, remount, resize, snapshot removal, volu
 Verify capacity and inode headroom, mount flags, kernel logs, application writes, ownership/permissions, and monitoring recovery. Confirm cleanup did not remove active data or break retention requirements.
 
 Official references: [Linux VFS](https://docs.kernel.org/filesystems/vfs.html), [findmnt](https://man7.org/linux/man-pages/man8/findmnt.8.html).
+
+## Related
+
+- [linux-host.md](linux-host.md) for I/O wait versus CPU.
+- [backup-disaster-recovery.md](backup-disaster-recovery.md) before deleting data to free space.
+
+## Common mistakes
+
+- Deleting files before identifying the mount, owner, and retention.
+- Confusing inode exhaustion with byte exhaustion.
+- Running filesystem repair on a mounted volume.

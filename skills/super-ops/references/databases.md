@@ -38,3 +38,14 @@ Present data scope, lock/availability impact, backup and restore proof, exact st
 Verify client connectivity, error rate, pool headroom, representative query latency, wait/lock clearance, replication position, data invariants, storage trend, and application health. Do not use “query completed” as the sole success criterion.
 
 Official references: [PostgreSQL monitoring](https://www.postgresql.org/docs/current/monitoring-stats.html), [MySQL Performance Schema](https://dev.mysql.com/doc/refman/8.4/en/performance-schema.html).
+
+## Related
+
+- [db-qps-spike.md](db-qps-spike.md) for time-boxed QPS / Com_* spikes.
+- [grafana.md](grafana.md) / [jumpserver.md](jumpserver.md) for the live query path.
+
+## Common mistakes
+
+- Stopping at "QPS correlates with traffic" without business logs.
+- `SELECT *` without LIMIT on large tables.
+- Killing a blocker session without mapping the wait graph.

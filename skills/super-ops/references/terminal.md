@@ -43,3 +43,14 @@ journalctl -u example.service -n 100 --no-pager
 ## Ops references (mandatory when applicable)
 
 Before any write/exec or other remote state change, load [safe-operations.md](safe-operations.md). For host/runtime/incident work, load **one** matching ops reference from the series skill router (not every applicable file). Cap: 1 provider appendix + 1 ops reference per hypothesis.
+
+## Related
+
+- [jumpserver.md](jumpserver.md) for 堡垒机 sessions — do not mix short names.
+- [workspace-troubleshooting.md](workspace-troubleshooting.md) when correlating this repo with a remote host.
+
+## Common mistakes
+
+- Guessing `serverId` / `terminalId` when multiple targets remain possible.
+- Raising `maxOutputBytes` instead of narrowing the command after truncation.
+- Using JumpServer `jumpserver_*` names on AT Terminal.

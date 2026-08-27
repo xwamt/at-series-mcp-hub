@@ -52,3 +52,14 @@ Do not use this text-file workflow for binaries, databases, large files, live st
 If an action fails, stop dependent steps, preserve evidence, check for a partial change, and assess service availability. Roll back when a declared trigger is met. If rollback creates a new risk, explain it and obtain approval. Report partial success as partial success, and label anything not checked as unverified.
 
 After a change, verify more than exit code: check the file or configuration, service state, recent logs, port or health endpoint, critical behavior, and relevant monitoring signals.
+
+## Related
+
+- Provider appendix ([terminal.md](terminal.md) or [jumpserver.md](jumpserver.md)) for the actual write/exec tools.
+- The matching ops reference for the subsystem being changed.
+
+## Common mistakes
+
+- Treating an IDE confirmation dialog as conversational approval.
+- Using a previous approval after the target or commands changed.
+- Claiming backup success without verifying size/checksum.

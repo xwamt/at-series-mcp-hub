@@ -33,3 +33,15 @@ Report:
 - Temporary mitigations, permanent follow-up work, and remaining risk.
 
 Never state that service is restored until health checks and critical behavior have been verified. A successful command exit code alone is insufficient. Do not open a Canvas until root cause is confirmed or the user asks for a report.
+
+## Related
+
+- SuperOps **time-boxed incident fast path** in `SKILL.md` for QPS/latency/error spikes.
+- [observability.md](observability.md) for signal correlation; [security-incidents.md](security-incidents.md) if compromise is suspected.
+- [safe-operations.md](safe-operations.md) before any mitigation that changes state.
+
+## Common mistakes
+
+- Skipping business logs because metrics already "correlate".
+- Restarting the service as the default mitigation.
+- Opening a Canvas before root cause is confirmed.
