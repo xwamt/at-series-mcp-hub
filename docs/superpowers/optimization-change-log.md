@@ -1237,3 +1237,18 @@ AssertionError: expected { id: 'node-default', …(9) } to match object { id: 'a
 **这一轮没有再跑真 bash 的 xtrace 差分探针。** FIX-1 用它证明的是「朴素切分不会把危险命令变安全」，而那条结论只依赖分段逻辑，本次分段只从 `\|` 扩到 `[\|;&]`（切得更碎 = 约束更多），结论方向不变。**但要诚实说明差别**：FIX-1 的探针能断言「实际执行的程序名全部落在白名单内」，黑名单模型下这个断言不存在对应物——放行的前提变成了「没有落在黑名单内」，而黑名单的完备性无法用一台真 bash 证明，只能靠人不断补。**这就是本次反转在可验证性上的损失，一并记下。**
 
 **并发协作说明。** 追加本条前重新读取了台账尾部——落笔前 `wc -l` 为 1195、末条是 1160 行起的 FIX-1，文件为 **CRLF** 且以 CRLF 结尾，本条落在其后的真实末尾并以 CRLF 追加，未对既有内容做任何换行归一化。terminal 仓侧：`ADR-003` 末行仍无行尾换行（`HEAD` 里本来就是这个形状，逐字节核对过）；一次性探针 `test/agent/__probe_count.test.ts`（只为数出黑名单条目数）在提交前已删除，`git status` 复核确认未混入。hub 仓 `packages/**` 与他人未提交的在制品（`packages/mcp-hub/src/installer/cursor.ts` 等）全程未被波及。
+
+### 2026-08-27 · Hub-perf · 热路径从内存目录服务 list/call
+
+| 字段 | 内容 |
+|---|---|
+| 仓库 | at-series-mcp-hub |
+| 动机 | 性能分析 P0：每次 `tools/list`/`tools/call` 同步全量探测，僵死桥把 +2s 打进 p50。见 `docs/reports/2026-08-27-hub-runtime-performance.md` |
+| 代码 diff | `src/hub/server.ts` 热路径重写（list TTL / call 内存路由 / 并行 health+tools / 负缓存 / stale 90s / invoke 立即 demote / selection 15s 宽限 / idle 完成时 touch）；`src/hub/discovery.ts` search description 截断；`src/hub/aggregate.ts` 单次排序；`src/protocol/index.ts` `DEFAULT_TOOL_SELECTION_IDLE_MS=120000`、`SEARCH_DESCRIPTION_MAX_CHARS`；`src/audit/logger.ts` 异步写路径脱敏；`src/registry/watch.ts` poll 指纹；`src/registry/read.ts` 并行读；`src/fs/fileLock.ts` 死 pid 夺锁；`src/fs/atomicWrite.ts` rename 重试；`src/publisher/BridgePublisher.ts` heartbeat 内存缓存；`test/hub.hotpath.test.ts` 新建 |
+| 契约影响 | **是。** Hub 聚合/路由、registry 刷新语义、publisher/hub sync 锁、MCP 配置 idle 默认、Hub 暴露形状（search 截断 / providers 紧凑 JSON / selection 宽限） |
+| 文档 diff | `docs/requirements.md` D12/H9；`docs/protocol/v1.md` §3.4 / §5 / §8.1–8.4 / §8.6 / §9.1；`docs/protocol/v2.md` §3 / §4 / §4.1；`docs/guides/plugin-integration.md`；`README.md`；`AGENTS.md` 测试最少集；`packages/mcp-hub/CHANGELOG.md` Unreleased |
+| protocolVersion | 不变（Bridge 1 / Hub 2）。澄清性 + 加法，无破坏 |
+| 插件需跟改 | **否。** 心跳仍须 ≤30s（90s stale 现在会真正跳过探测）。installer 仍写 `AT_SERIES_TOOL_SELECTION_IDLE_MS=0` |
+| 核心不变量 | 已核对 **INV-1..INV-6**。INV-1/2：未新增 MCP 条目、未恢复 per-plugin server。INV-3：工具仍来自 registry/`GET /tools`。INV-4：discovery 默认仍 `auto`/阈值 20。INV-5：selection 只过滤 `tools/list`，宽限期不阻止 routing。INV-6：五个元工具仍始终暴露、`risk: read`、installer autoApprove 未改 |
+| 验证 | `npx tsc -p tsconfig.json --noEmit` 退出码 0；`npx vitest run` **34 文件 / 415 用例全部通过**（含新建 `hub.hotpath.test.ts` 8 用例：僵死桥不拖垮健康 call、TTL/负缓存二次 list <500ms、冷启动 <500ms、invoke demote、search 截断、providers 紧凑 JSON、selection 宽限） |
+| 提交 | `26a4965`（实现）+ 本条台账提交。分支 `cursor/hub-performance-analysis-5691` |
