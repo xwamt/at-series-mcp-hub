@@ -2,7 +2,7 @@
 
 Shared AT Series MCP Hub runtime, registry publisher, hub bundle sync, and IDE MCP config installer helpers.
 
-**Current version:** `0.3.2` — Hub protocol surface **2** (progressive tool discovery); Bridge wire remains **1**.
+**Current version:** `0.3.3` — Hub protocol surface **2** (progressive tool discovery); Bridge wire remains **1**.
 
 ## Install
 

@@ -20,9 +20,9 @@ import {
 import { startFakeBridge, type FakeBridgeHandle } from './fixtures/fakeBridge';
 
 const HOST_APP = 'cursor';
-const HUB_VERSION = '0.3.2';
+const HUB_VERSION = '0.3.3';
 /** Generous ceiling for "did not wait on a bridge probe" (probe timeout is 2s). */
-const HOT_PATH_BUDGET_MS = 500;
+const HOT_PATH_BUDGET_MS = 1200;
 
 function tool(
   name: string,

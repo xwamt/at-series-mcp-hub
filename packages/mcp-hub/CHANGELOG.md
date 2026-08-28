@@ -4,7 +4,7 @@ All notable changes to `@at-series/mcp-hub`.
 This package is consumed by AT Terminal, AT JumpServer, AT Grafana, and AT Nacos —
 every entry below is written for those plugin authors.
 
-## Unreleased
+## 0.3.3
 
 ### Changed
 

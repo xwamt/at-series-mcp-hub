@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| npm 包 | [`@at-series/mcp-hub`](https://www.npmjs.com/package/@at-series/mcp-hub) **`0.3.2`**（`packages/mcp-hub`） |
+| npm 包 | [`@at-series/mcp-hub`](https://www.npmjs.com/package/@at-series/mcp-hub) **`0.3.3`**（`packages/mcp-hub`） |
 | Bridge 规范 | [`docs/protocol/v1.md`](docs/protocol/v1.md)（对接真源，`protocolVersion: 1`） |
 | Hub 暴露规范 | [`docs/protocol/v2.md`](docs/protocol/v2.md)（渐进发现 / select / auto-clear） |
 | 系列 Skill | [`skills/super-ops`](skills/super-ops/SKILL.md)（**SuperOps**：discover → select → call + 运维规范） |
